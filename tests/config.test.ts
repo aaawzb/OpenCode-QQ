@@ -41,4 +41,11 @@ describe("loadConfig", () => {
     expect(cfg.sandbox).toBe(false)
     expect(cfg.model).toBe("anthropic/claude-sonnet-4-5")
   })
+  it("markdownReply 与 streaming 默认 true，可显式关闭", async () => {
+    process.env.QQ_BOT_APPID = "a"
+    process.env.QQ_BOT_APPSECRET = "b"
+    const cfg = loadConfig("/nonexistent")!
+    expect(cfg.markdownReply).toBe(true)
+    expect(cfg.streaming).toBe(true)
+  })
 })
