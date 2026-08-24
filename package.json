@@ -14,6 +14,8 @@
   },
   "keywords": ["opencode", "opencode-plugin", "qq", "bot"],
   "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/aaawzb/opencode-qq.git" },
+  "bugs": { "url": "https://github.com/aaawzb/opencode-qq/issues" },
   "dependencies": { "ws": "^8.18.0" },
   "devDependencies": {
     "@opencode-ai/plugin": "latest",
