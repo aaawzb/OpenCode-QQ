@@ -96,6 +96,11 @@ describe("SessionManager.dispatch", () => {
     expect(client.createdTitles[0]).toHaveLength(20)
   })
 
+  it("snapshot 导出映射", async () => {
+    await sm.dispatch("u9", "hi")
+    expect(sm.snapshot()["u9"]).toBeDefined()
+  })
+
   it("/new 触发 onSessionReset 并携带旧会话 ID", async () => {
     const resets: string[] = []
     const sm2 = new SessionManager(
