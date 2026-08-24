@@ -28,6 +28,7 @@ export class QQGateway {
   private sessionId: string | null = null
   private lastSeq: number | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectAttempt = 0
   private stopped = false
 
@@ -46,6 +47,8 @@ export class QQGateway {
   private cleanup(): void {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = null
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
     if (this.ws) {
       this.ws.removeAllListeners()
       try {
@@ -62,7 +65,10 @@ export class QQGateway {
     const base = this.opts.reconnectBaseMs ?? 1000
     const delay = Math.min(base * 2 ** this.reconnectAttempt, 60_000)
     this.reconnectAttempt++
-    setTimeout(() => this.connect().catch(() => this.scheduleReconnect()), delay)
+    this.reconnectTimer = setTimeout(() => {
+      if (this.stopped) return
+      this.connect().catch(() => this.scheduleReconnect())
+    }, delay)
   }
 
   private async connect(): Promise<void> {

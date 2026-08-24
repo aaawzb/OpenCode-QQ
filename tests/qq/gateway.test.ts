@@ -94,4 +94,27 @@ describe("QQGateway", () => {
     gw.stop()
     h.server.close()
   })
+
+  it("退避窗口内 stop() 后不再重连", async () => {
+    const h = await startMockGateway()
+    const connected = vi.fn()
+    const disconnected = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      reconnectBaseMs: 50,
+      connected,
+      disconnected,
+      message: vi.fn(),
+    })
+    gw.start()
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(1))
+    h.lastClient()!.close()
+    await vi.waitFor(() => expect(disconnected).toHaveBeenCalledTimes(1))
+    gw.stop()
+    await new Promise((r) => setTimeout(r, 300))
+    expect(connected).toHaveBeenCalledTimes(1)
+    h.server.close()
+  })
 })
