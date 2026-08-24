@@ -117,4 +117,35 @@ describe("QQGateway", () => {
     expect(connected).toHaveBeenCalledTimes(1)
     h.server.close()
   })
+
+  it("同一事件的重复推送只回调一次", async () => {
+    const h = await startMockGateway()
+    const connected = vi.fn()
+    const gotMsg = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      connected,
+      disconnected: vi.fn(),
+      message: gotMsg,
+    })
+    gw.start()
+    await vi.waitFor(() => expect(connected).toHaveBeenCalled())
+    const client = h.lastClient()!
+    const dup = {
+      op: 0,
+      s: 5,
+      t: "C2C_MESSAGE_CREATE",
+      id: "EVT-DUP-1",
+      d: { openid: "U1", content: "once", msg_id: "M1", timestamp: "2026-01-01" },
+    }
+    client.send(JSON.stringify(dup))
+    await vi.waitFor(() => expect(gotMsg).toHaveBeenCalledTimes(1))
+    client.send(JSON.stringify({ ...dup, s: 6 })) // 同 id 重推
+    await new Promise((r) => setTimeout(r, 100))
+    expect(gotMsg).toHaveBeenCalledTimes(1) // 未增加
+    gw.stop()
+    h.server.close()
+  })
 })

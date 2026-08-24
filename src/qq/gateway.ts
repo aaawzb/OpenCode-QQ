@@ -14,6 +14,7 @@ interface Packet {
   d?: Record<string, unknown>
   s?: number
   t?: string
+  id?: string
 }
 
 export interface QQGatewayOptions extends GatewayEvents {
@@ -21,6 +22,7 @@ export interface QQGatewayOptions extends GatewayEvents {
   getToken: () => Promise<string>
   intents: number
   reconnectBaseMs?: number
+  maxSeen?: number
 }
 
 export class QQGateway {
@@ -31,6 +33,21 @@ export class QQGateway {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectAttempt = 0
   private stopped = false
+  private seenIds = new Set<string>()
+  private seenOrder: string[] = []
+
+  private isDuplicate(key: string): boolean {
+    if (!key) return false
+    if (this.seenIds.has(key)) return true
+    this.seenIds.add(key)
+    this.seenOrder.push(key)
+    const cap = this.opts.maxSeen ?? 1000
+    if (this.seenOrder.length > cap) {
+      const oldest = this.seenOrder.shift()
+      if (oldest !== undefined) this.seenIds.delete(oldest)
+    }
+    return false
+  }
 
   constructor(private opts: QQGatewayOptions) {}
 
@@ -99,7 +116,9 @@ export class QQGateway {
         break
       case OP_DISPATCH: {
         this.lastSeq = pkt.s ?? this.lastSeq
-        this.handleDispatch(pkt.t ?? "", (pkt.d ?? {}) as Record<string, unknown>)
+        const d = (pkt.d ?? {}) as Record<string, unknown>
+        if (this.isDuplicate(pkt.id ?? String(d.msg_id ?? ""))) return
+        this.handleDispatch(pkt.t ?? "", d)
         break
       }
     }
