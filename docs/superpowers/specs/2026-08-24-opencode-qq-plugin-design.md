@@ -144,7 +144,7 @@ QQ 客户端(单聊) ⇄ QQ开放平台 ⇄ [WSS出站+REST] qq-gateway（openco
 
 ## 9. 项目形态
 
-- TypeScript + Bun 开发，构建为标准 opencode 插件 npm 包（包名暂定 `opencode-qq`）。
+- TypeScript + Bun 开发，构建为标准 opencode 插件 npm 包，包名 `opencode-qq`。
 - README 包含完整接入指引：注册开放平台 → 创建机器人 → 配置沙箱 → 安装插件 → 填写凭据。
 - 仓库根目录即插件源码；`docs/superpowers/specs/` 存放本设计文档。
 
