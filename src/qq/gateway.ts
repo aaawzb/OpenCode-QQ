@@ -27,6 +27,7 @@ export class QQGateway {
   private ws: WebSocket | null = null
   private sessionId: string | null = null
   private lastSeq: number | null = null
+  private resumeAttempted = false
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectAttempt = 0
@@ -62,6 +63,11 @@ export class QQGateway {
 
   private scheduleReconnect(): void {
     if (this.stopped) return
+    if (this.resumeAttempted) {
+      this.resumeAttempted = false
+      this.sessionId = null
+      this.lastSeq = null
+    }
     const base = this.opts.reconnectBaseMs ?? 1000
     const delay = Math.min(base * 2 ** this.reconnectAttempt, 60_000)
     this.reconnectAttempt++
@@ -89,9 +95,11 @@ export class QQGateway {
         const interval = (pkt.d as { heartbeat_interval: number }).heartbeat_interval
         this.startHeartbeat(interval)
         if (this.sessionId !== null && this.lastSeq !== null) {
-          void this.sendResume()
+          this.resumeAttempted = true
+          void this.sendResume().catch(() => this.ws?.terminate())
         } else {
-          void this.sendIdentify()
+          this.resumeAttempted = false
+          void this.sendIdentify().catch(() => this.ws?.terminate())
         }
         break
       }
@@ -135,11 +143,13 @@ export class QQGateway {
   private handleDispatch(t: string, d: Record<string, unknown>): void {
     if (t === "READY") {
       this.sessionId = String(d.session_id)
+      this.resumeAttempted = false
       this.reconnectAttempt = 0
       this.opts.connected()
       return
     }
     if (t === "RESUMED") {
+      this.resumeAttempted = false
       this.reconnectAttempt = 0
       this.opts.connected()
       return

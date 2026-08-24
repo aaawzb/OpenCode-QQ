@@ -117,4 +117,71 @@ describe("QQGateway", () => {
     expect(connected).toHaveBeenCalledTimes(1)
     h.server.close()
   })
+
+  it("Resume 被拒（服务端直接断开）后回落全新 Identify 而非循环 Resume", async () => {
+    const server = new WebSocketServer({ port: 0 })
+    await new Promise<void>((r) => server.on("listening", r))
+    const port = (server.address() as { port: number }).port
+    const clients: WsSocket[] = []
+    const sentOps: number[][] = []
+    server.on("connection", (client) => {
+      clients.push(client)
+      const ops: number[] = []
+      sentOps.push(ops)
+      client.send(JSON.stringify({ op: 10, d: { heartbeat_interval: 30000 } }))
+      client.on("message", (raw) => {
+        const pkt = JSON.parse(raw.toString())
+        ops.push(pkt.op)
+        if (pkt.op === 2) {
+          client.send(
+            JSON.stringify({
+              op: 0,
+              s: 1,
+              t: "READY",
+              d: { session_id: `SESS-${sentOps.length}`, user: { id: "bot" } },
+            }),
+          )
+        }
+        if (pkt.op === 6) client.close()
+      })
+    })
+    const connected = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      reconnectBaseMs: 10,
+      connected,
+      message: vi.fn(),
+      disconnected: vi.fn(),
+    })
+    gw.start()
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(1))
+    clients[0].close()
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(2), { timeout: 5000 })
+    expect(sentOps[1]).toContain(6)
+    expect(sentOps[2]).toContain(2)
+    expect(sentOps[2]).not.toContain(6)
+    gw.stop()
+    server.close()
+  })
+
+  it("getToken 失败被兜底，不产生 unhandled rejection 且能恢复连接", async () => {
+    const h = await startMockGateway()
+    let calls = 0
+    const connected = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+      getToken: () => (++calls === 1 ? Promise.reject(new Error("token boom")) : Promise.resolve("TK")),
+      intents: INTENT,
+      reconnectBaseMs: 10,
+      connected,
+      message: vi.fn(),
+      disconnected: vi.fn(),
+    })
+    gw.start()
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(1), { timeout: 5000 })
+    gw.stop()
+    h.server.close()
+  })
 })
