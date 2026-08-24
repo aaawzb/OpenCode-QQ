@@ -24,26 +24,32 @@
 
 ```
 OPQQ/
-├── package.json              # npm 包配置 name=opencode-qq
+├── package.json              # npm 包配置 name=opencode-qq，含 bin: opencode-qq-setup
 ├── tsconfig.json             # tsc 构建 → dist/
 ├── vitest.config.ts
 ├── .gitignore
 ├── README.md                 # 接入指引
+├── bin/
+│   └── setup.mjs             # 扫码绑定引导命令（Node 可直接运行的 .mjs，复用 src/setup-core.ts）
 └── src/
-    ├── index.ts              # 插件入口：装配四模块、注册 hooks、静默禁用
+    ├── index.ts              # 插件入口：装配各模块、注册 hooks、静默禁用、流式接线
     ├── config.ts             # 配置加载（文件 ~/.config/opencode/opencode-qq.json + 环境变量覆盖）
+    ├── setup-core.ts         # 凭据合并写入逻辑（供 bin 与测试共用）
     ├── constants.ts          # 域名/intent 等常量集中处
     ├── qq/
     │   ├── auth.ts           # access_token 获取与缓存刷新
-    │   ├── gateway.ts        # WSS 连接、心跳、Identify/Resume、退避重连
-    │   └── api.ts            # REST 发送队列、msg_seq 管理、429 退避、被动/主动降级
+    │   ├── gateway.ts        # WSS 连接、心跳、Identify/Resume、退避重连、消息去重
+    │   ├── api.ts            # REST 发送队列、msg_seq 管理、429 退避、markdown 及降级、被动/主动降级
+    │   └── stream.ts         # stream_messages 流式发送状态机（首片/续片节流/收尾/失败标记）
     ├── commands.ts           # /new /status /help 解析
-    ├── session-manager.ts    # openid→sessionID 映射、持久化、dispatch 主流程
+    ├── session-manager.ts    # openid→sessionID 映射、持久化、dispatch 主流程（支持图片 parts）
     ├── approver.ts           # 权限编号分配、QQ 回复解析、10 分钟超时
     ├── event-pusher.ts       # opencode 事件过滤/节流/断线补发
     └── util/
         ├── chunk.ts          # UTF-8 字节安全的长文分条
-        └── throttle.ts       # 按 key 聚合的节流器
+        ├── throttle.ts       # 按 key 聚合的节流器
+        ├── media.ts          # 图片下载转 data URL、mime 推断
+        └── quote.ts          # 引用消息文本防御性提取
 tests/                        # 与 src 镜像（vitest）
 ```
 
@@ -602,11 +608,13 @@ describe("QQApi.sendC2C", () => {
     const [url, init] = fetchFn.mock.calls[0]
     expect(url).toBe("https://api.bot.qq.com/v2/users/OPENID/messages")
     expect(init.headers.Authorization).toBe("QQBot TK")
-    expect(init.body.msg_type).toBe(0)
-    expect(init.body.content).toBe("hi")
-    expect(init.body.msg_id).toBe("MSG1")
-    expect(init.body.msg_seq).toBe(1)
-    expect(fetchFn.mock.calls[1][1].body.msg_seq).toBe(2)
+    // 注意：实现向 fetchFn 传入的是 JSON 字符串，断言前需解析
+    const body1 = JSON.parse(init.body)
+    expect(body1.msg_type).toBe(0)
+    expect(body1.content).toBe("hi")
+    expect(body1.msg_id).toBe("MSG1")
+    expect(body1.msg_seq).toBe(1)
+    expect(JSON.parse(fetchFn.mock.calls[1][1].body).msg_seq).toBe(2)
   })
 
   it("429 按 Retry-After 退避重试后成功", async () => {
@@ -635,8 +643,8 @@ describe("QQApi.sendC2C", () => {
       fetchFn: fetchFn as typeof fetch,
     })
     for (let i = 0; i < 5; i++) await api.sendC2C("O", `r${i}`, { msgId: "MSG9" })
-    expect(fetchFn.mock.calls[3][1].body.msg_id).toBe("MSG9")
-    expect(fetchFn.mock.calls[4][1].body.msg_id).toBeUndefined()
+    expect(JSON.parse(fetchFn.mock.calls[3][1].body).msg_id).toBe("MSG9")
+    expect(JSON.parse(fetchFn.mock.calls[4][1].body).msg_id).toBeUndefined()
   })
 })
 ```
@@ -1911,12 +1919,12 @@ git commit -m "feat: 插件入口装配与冒烟测试"
 - [ ] **步骤 11.1：编写 README**
 
 内容必须包含（结构给出，文字由执行者按此骨架撰写，不得留 TODO）：
-1. 简介：一句话 + 功能列表（对话驱动 opencode、任务完成/出错推送、QQ 远程审批权限、`/new` `/status` `/help`）。
+1. 简介：一句话 + 功能列表（对话驱动 opencode、Markdown 回复、流式打字机输出、图片理解、任务完成/出错推送、QQ 远程审批权限、`/new` `/status` `/help`）。
 2. 前置条件：注册 QQ 开放平台（个人/企业）、创建机器人拿 AppID/AppSecret、配置沙箱单聊账号；提醒新机器人正式环境 IP 白名单要求。
 3. 安装：`opencode.json` 中 `"plugin": ["opencode-qq"]`。
-4. 配置：`~/.config/opencode/opencode-qq.json` 示例（appId、appSecret、sandbox:true、allowlist、model、events.toolProgress），以及 `QQ_BOT_APPID`/`QQ_BOT_APPSECRET` 环境变量方式；安全提示：勿提交 secret。
-5. 使用：添加机器人为好友 → 单聊发消息；指令表；远程审批交互示例（`[权限请求 #1] …` → `同意 1`）。
-6. 注意事项：被动消息窗口（60 分钟/4 条）、主动消息限制、沙箱与正式切换。
+4. 配置：两种凭据方式——运行 `npx opencode-qq-setup` 扫码绑定自动写入；或手写 `~/.config/opencode/opencode-qq.json`（示例含 appId、appSecret、sandbox:true、allowlist、model、markdownReply:true、streaming:true、events.toolProgress:false），以及 `QQ_BOT_APPID`/`QQ_BOT_APPSECRET` 环境变量方式；安全提示：勿提交 secret。
+5. 使用：添加机器人为好友 → 单聊发消息（支持发图片）；指令表；远程审批交互示例（`[权限请求 #1] …` → `同意 1`）。
+6. 注意事项：被动消息窗口（60 分钟/4 条）、主动消息限制、沙箱与正式切换、流式输出的增量/快照语义备注。
 7. 开发：`bun install` / `bun test` / `bun run build`。
 
 - [ ] **步骤 11.2：发布演练校验**
@@ -1934,6 +1942,977 @@ git push origin master
 
 ---
 
+### 任务 12：消息去重（gateway）
+
+**文件：**
+- 修改：`src/qq/gateway.ts`
+- 测试：`tests/qq/gateway.test.ts`（追加用例）
+
+官方明确"相同 msg_id 可能多次推送"。以 dispatch 包的 `id` 字段（DataPacket 接口含 `id?: string`）为键，缺省回退 `d.msg_id`。
+
+- [ ] **步骤 12.1：编写失败测试**
+
+在 `tests/qq/gateway.test.ts` 的 describe 内追加：
+```ts
+it("同一事件的重复推送只回调一次", async () => {
+  const h = await startMockGateway()
+  const gotMsg = vi.fn()
+  const gw = new QQGateway({
+    getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+    getToken: () => Promise.resolve("TK"),
+    intents: INTENT,
+    on: { connected: vi.fn(), message: gotMsg },
+  })
+  gw.start()
+  await vi.waitFor(() => expect(gotMsg).toHaveBeenCalledTimes(0).then(() => {}, () => {}))
+  const client = (h as unknown as { _last?: WsSocket })._last!
+  const dup = {
+    op: 0,
+    s: 5,
+    t: "C2C_MESSAGE_CREATE",
+    id: "EVT-DUP-1",
+    d: { openid: "U1", content: "once", msg_id: "M1", timestamp: "2026-01-01" },
+  }
+  client.send(JSON.stringify(dup))
+  await vi.waitFor(() => expect(gotMsg).toHaveBeenCalledTimes(1))
+  client.send(JSON.stringify({ ...dup, s: 6 })) // 同 id 重推
+  await new Promise((r) => setTimeout(r, 100))
+  expect(gotMsg).toHaveBeenCalledTimes(1) // 未增加
+  gw.stop()
+  h.server.close()
+})
+```
+
+注意：第一个 `vi.waitFor` 写法别扭，直接删掉该行，保留后续断言即可（落地时清理）。
+
+- [ ] **步骤 12.2：运行确认失败**
+
+运行：`bunx vitest run tests/qq/gateway.test.ts`
+预期：新用例 FAIL——重复推送导致 gotMsg 被调用 2 次。
+
+- [ ] **步骤 12.3：实现去重**
+
+修改 `src/qq/gateway.ts`：
+
+Packet 接口加字段：
+```ts
+interface Packet {
+  op: number
+  d?: Record<string, unknown>
+  s?: number
+  t?: string
+  id?: string
+}
+```
+
+QQGatewayOptions 加可调参数：
+```ts
+export interface QQGatewayOptions extends GatewayEvents {
+  // ...原有字段保持不变...
+  maxSeen?: number
+}
+```
+
+类内新增状态与方法：
+```ts
+private seenIds = new Set<string>()
+private seenOrder: string[] = []
+
+private isDuplicate(key: string): boolean {
+  if (!key) return false
+  if (this.seenIds.has(key)) return true
+  this.seenIds.add(key)
+  this.seenOrder.push(key)
+  const cap = this.opts.maxSeen ?? 1000
+  if (this.seenOrder.length > cap) {
+    const oldest = this.seenOrder.shift()
+    if (oldest !== undefined) this.seenIds.delete(oldest)
+  }
+  return false
+}
+```
+
+`handlePacket` 的 OP_DISPATCH 分支改为：
+```ts
+case OP_DISPATCH: {
+  this.lastSeq = pkt.s ?? this.lastSeq
+  const d = (pkt.d ?? {}) as Record<string, unknown>
+  if (this.isDuplicate(pkt.id ?? String(d.msg_id ?? ""))) return
+  this.handleDispatch(pkt.t ?? "", d)
+  break
+}
+```
+
+- [ ] **步骤 12.4：运行确认通过**
+
+运行：`bunx vitest run tests/qq/gateway.test.ts`
+预期：全部 PASS（含原有用例）。
+
+- [ ] **步骤 12.5：Commit**
+
+```bash
+git add src/qq/gateway.ts tests/qq/gateway.test.ts
+git commit -m "feat: WSS dispatch 事件去重"
+```
+
+---
+
+### 任务 13：Markdown 回复
+
+**文件：**
+- 修改：`src/config.ts`、`src/qq/api.ts`
+- 测试：`tests/config.test.ts`、`tests/qq/api.test.ts`（追加用例）
+
+- [ ] **步骤 13.1：config 增加 markdownReply 与 streaming 字段**
+
+在 `src/config.ts` 的 `QQConfig` 接口追加：
+```ts
+/** AI 回复是否用 Markdown 格式发送，默认 true */
+markdownReply: boolean
+/** 是否启用流式打字机输出，默认 true */
+streaming: boolean
+```
+
+`loadConfig` 返回对象中追加：
+```ts
+markdownReply: file.markdownReply ?? true,
+streaming: file.streaming ?? true,
+```
+
+`tests/config.test.ts` 追加用例：
+```ts
+it("markdownReply 与 streaming 默认 true，可显式关闭", async () => {
+  process.env.QQ_BOT_APPID = "a"
+  process.env.QQ_BOT_APPSECRET = "b"
+  const cfg = loadConfig("/nonexistent")!
+  expect(cfg.markdownReply).toBe(true)
+  expect(cfg.streaming).toBe(true)
+})
+```
+
+- [ ] **步骤 13.2：编写 api 失败测试**
+
+`tests/qq/api.test.ts` 追加：
+```ts
+it("format=markdown 发送 msg_type=2 且失败降级为纯文本重试一次", async () => {
+  const fetchFn = vi
+    .fn()
+    .mockResolvedValueOnce(new Response("", { status: 400 }))
+    .mockResolvedValueOnce(okJson({ id: "m" }))
+  const api = new QQApi({
+    restBase: "https://api.bot.qq.com",
+    getToken: () => Promise.resolve("TK"),
+    fetchFn: fetchFn as typeof fetch,
+  })
+  await api.sendC2C("O", "# 标题", { msgId: "MD1", format: "markdown" })
+  const body1 = JSON.parse(fetchFn.mock.calls[0][1].body)
+  const body2 = JSON.parse(fetchFn.mock.calls[1][1].body)
+  expect(body1.msg_type).toBe(2)
+  expect(body1.markdown.content).toBe("# 标题")
+  expect(body2.msg_type).toBe(0)
+  expect(body2.content).toBe("# 标题")
+  expect(body2.msg_seq).toBe(body1.msg_seq)
+})
+```
+
+- [ ] **步骤 13.3：运行确认失败**
+
+运行：`bunx vitest run tests/config.test.ts tests/qq/api.test.ts`
+预期：FAIL。
+
+- [ ] **步骤 13.4：实现 markdown 与降级**
+
+`SendOptions`（`src/types.ts`）追加：
+```ts
+export interface SendOptions {
+  msgId?: string
+  /** 回复格式；默认 text。markdown 发送失败自动降级 text 重试一次 */
+  format?: "text" | "markdown"
+}
+```
+
+`src/qq/api.ts` 重构发送路径（msg_seq 每条逻辑消息只消耗一次）：
+```ts
+sendC2C(openid: string, content: string, options: SendOptions = {}): Promise<void> {
+  const task = this.queue.then(() => this.doSend(openid, content, options))
+  this.queue = task.catch(() => {})
+  return task
+}
+
+private nextSeq(msgId?: string): number | undefined {
+  if (!msgId) return undefined
+  const used = this.seqCounters.get(msgId) ?? 0
+  if (used >= MAX_REPLIES_PER_MSG_ID) return undefined // 额度用尽 → 调用方降级主动消息
+  const seq = used + 1
+  this.seqCounters.set(msgId, seq)
+  if (this.seqCounters.size > 500) this.seqCounters.clear()
+  return seq
+}
+
+private buildBody(content: string, format: "text" | "markdown", msgId?: string): Record<string, unknown> {
+  const seq = this.nextSeq(msgId)
+  const base: Record<string, unknown> = {}
+  if (seq !== undefined && msgId) {
+    base.msg_id = msgId
+    base.msg_seq = seq
+  }
+  if (format === "markdown") {
+    base.msg_type = 2
+    base.markdown = { content }
+  } else {
+    base.msg_type = 0
+    base.content = content
+  }
+  return base
+}
+
+private async postWithRetry(openid: string, body: Record<string, unknown>): Promise<void> {
+  for (let attempt = 0; attempt <= 3; attempt++) {
+    const token = await this.opts.getToken()
+    const res = await this.fetchFn(`${this.opts.restBase}/v2/users/${openid}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `QQBot ${token}` },
+      body: JSON.stringify(body),
+    })
+    if (res.status === 429 && attempt < 3) {
+      const retryAfter = Number(res.headers.get("Retry-After") ?? "1")
+      await new Promise((r) => setTimeout(r, Math.min(retryAfter, 30) * 1000))
+      continue
+    }
+    if (!res.ok) throw new Error(`sendC2C failed: HTTP ${res.status} ${await res.text()}`)
+    return
+  }
+}
+
+private async doSend(openid: string, content: string, options: SendOptions): Promise<void> {
+  const format = options.format ?? "text"
+  let msgId = options.msgId
+  let seqReserved: number | undefined
+  if (msgId) {
+    seqReserved = this.nextSeq(msgId)
+    if (seqReserved === undefined) msgId = undefined // 被动额度用尽 → 主动消息
+  }
+  const makeBody = (fmt: "text" | "markdown"): Record<string, unknown> => {
+    const body: Record<string, unknown> =
+      fmt === "markdown" ? { msg_type: 2, markdown: { content } } : { msg_type: 0, content }
+    if (msgId && seqReserved !== undefined) {
+      body.msg_id = msgId
+      body.msg_seq = seqReserved
+    }
+    return body
+  }
+  try {
+    await this.postWithRetry(openid, makeBody(format))
+  } catch (e) {
+    if (format === "markdown") {
+      await this.postWithRetry(openid, makeBody("text")) // 降级复用同一 msg_seq
+      return
+    }
+    throw e
+  }
+}
+```
+
+删除旧的 `doSend`/`buildBody` 冗余版本（保留一份实现即可）。原"额度用尽降级主动消息"与"429 重试"行为由上述实现覆盖；任务 4 的既有用例应继续通过（`msg_seq` 从 1 递增语义不变）。
+
+- [ ] **步骤 13.5：运行确认通过**
+
+运行：`bunx vitest run`
+预期：全部 PASS。
+
+- [ ] **步骤 13.6：Commit**
+
+```bash
+git add src/types.ts src/config.ts src/qq/api.ts tests/
+git commit -m "feat: markdown 回复与失败降级纯文本"
+```
+
+---
+
+### 任务 14：图片接收与引用消息
+
+**文件：**
+- 创建：`src/util/quote.ts`、`src/util/media.ts`
+- 修改：`src/types.ts`、`src/qq/gateway.ts`、`src/session-manager.ts`
+- 测试：`tests/util/quote.test.ts`、`tests/util/media.test.ts`、`tests/session-manager.test.ts`（追加）、`tests/qq/gateway.test.ts`（追加）
+
+- [ ] **步骤 14.1：编写 quote 失败测试**
+
+`tests/util/quote.test.ts`：
+```ts
+import { describe, expect, it } from "vitest"
+import { extractQuotedText } from "../../src/util/quote"
+
+describe("extractQuotedText", () => {
+  it("从 msg_elements 提取引用文本", () => {
+    const d = {
+      message_type: 103,
+      msg_elements: [{ text_element: { content: "被引用的原话" } }],
+    }
+    expect(extractQuotedText(d)).toBe("被引用的原话")
+  })
+  it("嵌套 content 字段兜底提取", () => {
+    const d = { message_type: 103, msg_elements: [{ content: "另一种结构" }] }
+    expect(extractQuotedText(d)).toBe("另一种结构")
+  })
+  it("非引用消息或解析不出返回空串", () => {
+    expect(extractQuotedText({ message_type: 0 })).toBe("")
+    expect(extractQuotedText({ message_type: 103 })).toBe("")
+    expect(extractQuotedText({ msg_elements: [{ image_element: {} }] })).toBe("")
+  })
+})
+```
+
+- [ ] **步骤 14.2：编写 media 失败测试**
+
+`tests/util/media.test.ts`：
+```ts
+import { describe, expect, it, vi } from "vitest"
+import { guessImageMime, toImageDataUrl } from "../../src/util/media"
+
+describe("guessImageMime", () => {
+  it("按扩展名推断", () => {
+    expect(guessImageMime("https://x/a.PNG")).toBe("image/png")
+    expect(guessImageMime("https://x/a.jpg")).toBe("image/jpeg")
+    expect(guessImageMime("https://x/a.webp?q=1")).toBe("image/webp")
+    expect(guessImageMime("https://x/a")).toBe("image/png") // 默认
+  })
+})
+
+describe("toImageDataUrl", () => {
+  it("下载并编码为 data URL", async () => {
+    const bytes = new Uint8Array([137, 80, 78, 71])
+    const fetchFn = vi.fn().mockResolvedValue(new Response(bytes, { status: 200 }))
+    const url = await toImageDataUrl("https://cdn/a.png", fetchFn as typeof fetch)
+    expect(url).toBe(`data:image/png;base64,${Buffer.from(bytes).toString("base64")}`)
+  })
+})
+```
+
+- [ ] **步骤 14.3：运行确认失败**
+
+运行：`bunx vitest run tests/util/quote.test.ts tests/util/media.test.ts`
+预期：FAIL，模块不存在。
+
+- [ ] **步骤 14.4：实现 quote 与 media**
+
+`src/util/quote.ts`：
+```ts
+type Json = unknown
+
+/** 官方未完全文档化 message_type=103 的 msg_elements 结构，做防御性递归提取 */
+export function extractQuotedText(d: Record<string, unknown>): string {
+  if (Number(d.message_type) !== 103) return ""
+  const out: string[] = []
+  const walk = (node: Json): void => {
+    if (Array.isArray(node)) {
+      node.forEach(walk)
+      return
+    }
+    if (node && typeof node === "object") {
+      const obj = node as Record<string, unknown>
+      if (typeof obj.content === "string" && obj.content.trim()) out.push(obj.content)
+      if (obj.text_element) walk(obj.text_element)
+      for (const key of Object.keys(obj)) {
+        if (key !== "content" && key !== "text_element") walk(obj[key])
+      }
+    }
+  }
+  walk(d.msg_elements)
+  return out.join("\n").slice(0, 2000)
+}
+```
+
+`src/util/media.ts`：
+```ts
+const MIME_BY_EXT: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+}
+
+export function guessImageMime(url: string): string {
+  const clean = url.split("?")[0] ?? ""
+  const ext = clean.split(".").pop()?.toLowerCase() ?? ""
+  return MIME_BY_EXT[ext] ?? "image/png"
+}
+
+export async function toImageDataUrl(
+  url: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<string> {
+  const res = await fetchFn(url)
+  if (!res.ok) throw new Error(`download attachment failed: HTTP ${res.status}`)
+  const buf = Buffer.from(await res.arrayBuffer())
+  return `data:${guessImageMime(url)};base64,${buf.toString("base64")}`
+}
+```
+
+- [ ] **步骤 14.5：运行确认通过**
+
+运行：`bunx vitest run tests/util/quote.test.ts tests/util/media.test.ts`
+预期：PASS。
+
+- [ ] **步骤 14.6：扩展 types 与 gateway 映射**
+
+`src/types.ts` 的 `IncomingC2CMessage` 追加可选字段：
+```ts
+export interface IncomingC2CMessage {
+  openid: string
+  content: string
+  msgId: string
+  timestamp: number
+  attachments?: Array<{ contentType: string; url: string; filename?: string }>
+  quotedText?: string
+}
+```
+
+`src/qq/gateway.ts` 的 C2C 分支改为：
+```ts
+if (t === "C2C_MESSAGE_CREATE") {
+  const rawAttachments = Array.isArray(d.attachments) ? d.attachments : []
+  this.opts.message({
+    openid: String(d.openid ?? ""),
+    content: String(d.content ?? ""),
+    msgId: String(d.msg_id ?? ""),
+    timestamp: Date.parse(String(d.timestamp ?? "")) || Date.now(),
+    attachments: rawAttachments
+      .filter((a): a is Record<string, unknown> => !!a && typeof a === "object")
+      .filter((a) => String(a.content_type ?? a.contentType ?? "") === "image" || String(a.url ?? "").match(/\.(png|jpe?g|gif|webp)/i))
+      .map((a) => ({
+        contentType: "image",
+        url: String(a.url ?? ""),
+        filename: a.filename === undefined ? undefined : String(a.filename),
+      }))
+      .filter((a) => a.url),
+    quotedText: extractQuotedText(d),
+  })
+}
+```
+
+文件顶部补 `import { extractQuotedText } from "../util/quote"`。
+
+`tests/qq/gateway.test.ts` 追加用例：
+```ts
+it("映射 attachments 与引用文本到 message 回调", async () => {
+  const h = await startMockGateway()
+  const gotMsg = vi.fn()
+  const gw = new QQGateway({
+    getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+    getToken: () => Promise.resolve("TK"),
+    intents: INTENT,
+    on: { connected: vi.fn(), message: gotMsg },
+  })
+  gw.start()
+  const client = await firstClient(h)
+  client.send(JSON.stringify({
+    op: 0, s: 9, t: "C2C_MESSAGE_CREATE",
+    id: "EVT-ATT-1",
+    d: {
+      openid: "U2", content: "看看这个", msg_id: "M2", timestamp: "2026-01-01",
+      attachments: [{ content_type: "image", url: "https://cdn/x.png" }],
+      message_type: 103,
+      msg_elements: [{ text_element: { content: "原图内容" } }],
+    },
+  }))
+  await vi.waitFor(() => expect(gotMsg).toHaveBeenCalled())
+  const msg = gotMsg.mock.calls[0][0]
+  expect(msg.attachments).toEqual([{ contentType: "image", url: "https://cdn/x.png", filename: undefined }])
+  expect(msg.quotedText).toBe("原图内容")
+  gw.stop()
+  h.server.close()
+})
+```
+
+（`firstClient(h)` 为测试文件内的小工具函数：等待 `_last` 出现并返回；落地时自行补充：
+```ts
+async function firstClient(h: Harness): Promise<WsSocket> {
+  await vi.waitFor(() => {
+    if (!h.lastClient()) throw new Error("no client yet")
+  })
+  return h.lastClient()!
+}
+```
+并把前两个用例的手动取 client 方式统一替换为该工具。）
+
+- [ ] **步骤 14.7：session-manager 透传图片**
+
+`OpencodeBridge.sessionPrompt` 签名追加第 4 个可选参数（保持旧用例兼容）：
+```ts
+sessionPrompt(
+  id: string,
+  text: string,
+  noReply: boolean,
+  files?: Array<{ mime: string; dataUrl: string }>,
+): Promise<{ parts: Array<{ type: string; text?: string }> }>
+```
+
+`SessionManager.dispatch` 追加可选 files 参数并在 prompt 时透传：
+```ts
+async dispatch(openid: string, text: string, files: Array<{ mime: string; dataUrl: string }> = []): Promise<string> {
+  // ...指令分支不变...
+  const result = await this.bridge.sessionPrompt(sessionId, text, false, files)
+  // ...其余不变...
+}
+```
+
+`tests/session-manager.test.ts` 追加：
+```ts
+it("dispatch 把图片透传给 bridge.sessionPrompt", async () => {
+  await sm.dispatch("u7", "看图", [{ mime: "image/png", dataUrl: "data:image/png;base64,xx" }])
+  expect(client.prompted[0].files).toEqual([{ mime: "image/png", dataUrl: "data:image/png;base64,xx" }])
+})
+```
+同时把 makeClient 的 sessionPrompt 记录改为 `{ id, text, noReply, files }` 四字段。
+
+- [ ] **步骤 14.8：index.ts 接线（下载图片 + 引用前缀 + markdown 格式）**
+
+修改 `src/index.ts` 下行处理（gateway on.message 内）：
+
+1. 导入 `import { toImageDataUrl } from "./util/media"`。
+2. ack 之后、`sessions.dispatch` 之前，把附件下载为 data URL 并拼装引用前缀：
+```ts
+const files: Array<{ mime: string; dataUrl: string }> = []
+for (const att of msg.attachments ?? []) {
+  try {
+    files.push({ mime: guessImageMime(att.url), dataUrl: await toImageDataUrl(att.url) })
+  } catch {
+    await replyTo(msg.openid, "⚠️ 图片下载失败，仅处理文字部分").catch(() => {})
+  }
+}
+const promptText =
+  (msg.quotedText ? `[引用消息] ${msg.quotedText}\n` : "") +
+  (files.length ? `[图片 x${files.length}] ` : "") +
+  msg.content
+const answer = await sessions.dispatch(msg.openid, promptText, files)
+```
+3. AI 回复发送改为按配置选择格式：
+```ts
+await replyTo(msg.openid, answer, cfg.markdownReply ? "markdown" : "text")
+```
+   `replyTo` 增加第三参 `format` 并透传给 `api.sendC2C(openid, chunk, { msgId, format })`；ack 回执仍用纯文本。文件顶部补 `guessImageMime` 导入。
+
+- [ ] **步骤 14.9：运行确认通过**
+
+运行：`bunx vitest run`
+预期：全部 PASS。
+
+- [ ] **步骤 14.10：Commit**
+
+```bash
+git add src/ tests/
+git commit -m "feat: 图片接收转 file part 与引用文本上下文"
+```
+
+---
+
+### 任务 15：流式输出（stream_messages）
+
+**文件：**
+- 创建：`src/qq/stream.ts`
+- 修改：`src/constants.ts`、`src/index.ts`
+- 测试：`tests/qq/stream.test.ts`
+
+协议事实（已核实）：`POST /v2/users/{openid}/stream_messages`；首片 `input_state=1,index=0` 服务端返回 `stream_msg_id`；续片携带它且 `input_mode=replace` 全量正文必须以上游已下发前缀开头；`input_state=10` 收尾；错误码 40007=前缀被改、50002=限频。
+
+- [ ] **步骤 15.1：编写失败测试**
+
+`tests/qq/stream.test.ts`：
+```ts
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { StreamSender } from "../../src/qq/stream"
+
+function okId(id: string) {
+  return new Response(JSON.stringify({ id }), { status: 200 })
+}
+
+describe("StreamSender", () => {
+  let bodies: Array<Record<string, unknown>>
+  let responses: Response[]
+  let fetchFn: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    bodies = []
+    responses = []
+    fetchFn = vi.fn().mockImplementation(async (_url: string, init?: { body?: unknown }) => {
+      bodies.push(init?.body as Record<string, unknown>)
+      return responses.shift() ?? okId("sid")
+    })
+  })
+
+  it("首片→续片→收尾的状态机报文正确", async () => {
+    responses.push(okId("SID-1"), okId("s"), okId("s"))
+    const s = new StreamSender({
+      restBase: "https://api.bot.qq.com",
+      getToken: () => Promise.resolve("TK"),
+      fetchFn: fetchFn as typeof fetch,
+    })
+    await s.begin("U", "MSG1", 3, "正在生成")
+    await s.update("正在生成，第一段落")
+    await s.finish("正在生成，第一段落。完毕")
+
+    expect(bodies[0]).toMatchObject({
+      input_mode: "replace", input_state: 1, index: 0,
+      content_type: "markdown", content_raw: "正在生成",
+      msg_id: "MSG1", msg_seq: 3,
+    })
+    expect(bodies[1]).toMatchObject({
+      input_state: 1, index: 1, stream_msg_id: "SID-1", msg_seq: 3,
+      content_raw: "正在生成，第一段落",
+    })
+    expect(bodies[2]).toMatchObject({ input_state: 10, index: 2, stream_msg_id: "SID-1" })
+  })
+
+  it("update 按 replace 全量正文发送（前缀安全）", async () => {
+    responses.push(okId("S"), okId("s"))
+    const s = new StreamSender({
+      restBase: "https://api.bot.qq.com",
+      getToken: () => Promise.resolve("TK"),
+      fetchFn: fetchFn as typeof fetch,
+    })
+    await s.begin("U", "M", 1, "abc")
+    await s.update("abcdef")
+    expect(bodies[1].content_raw).toBe("abcdef")
+    expect(bodies[1].input_mode).toBe("replace")
+  })
+
+  it("任何请求失败后置 failed 并停止再发", async () => {
+    responses.push(new Response("", { status: 400 }))
+    const s = new StreamSender({
+      restBase: "https://api.bot.qq.com",
+      getToken: () => Promise.resolve("TK"),
+      fetchFn: fetchFn as typeof fetch,
+    })
+    await s.begin("U", "M", 1, "x")
+    expect(s.failed).toBe(true)
+    await s.update("xy")
+    await s.finish("xyz")
+    expect(bodies).toHaveLength(1) // 失败后不再发
+  })
+
+  it("finish 后 update 是 no-op", async () => {
+    responses.push(okId("S"), okId("s"))
+    const s = new StreamSender({
+      restBase: "https://api.bot.qq.com",
+      getToken: () => Promise.resolve("TK"),
+      fetchFn: fetchFn as typeof fetch,
+    })
+    await s.begin("U", "M", 1, "a")
+    await s.finish("ab")
+    const n = bodies.length
+    await s.update("abc")
+    expect(bodies).toHaveLength(n)
+  })
+})
+```
+
+- [ ] **步骤 15.2：运行确认失败**
+
+运行：`bunx vitest run tests/qq/stream.test.ts`
+预期：FAIL，模块不存在。
+
+- [ ] **步骤 15.3：实现 StreamSender**
+
+`src/qq/stream.ts`：
+```ts
+interface StreamSenderOptions {
+  restBase: string
+  getToken: () => Promise<string>
+  fetchFn?: typeof fetch
+}
+
+export class StreamSender {
+  private streamMsgId: string | null = null
+  private index = 0
+  private finished = false
+  failed = false
+
+  constructor(private opts: StreamSenderOptions) {}
+
+  private async post(openid: string, body: Record<string, unknown>): Promise<boolean> {
+    if (this.failed || this.finished) return false
+    try {
+      const token = await this.opts.getToken()
+      const res = await (this.opts.fetchFn ?? fetch)(
+        `${this.opts.restBase}/v2/users/${openid}/stream_messages`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `QQBot ${token}` },
+          body: JSON.stringify(body),
+        },
+      )
+      if (!res.ok) {
+        this.failed = true // 含 40007 前缀冲突 / 50002 限频 / 其他
+        return false
+      }
+      const data = (await res.json()) as { id?: string }
+      if (!this.streamMsgId && data.id) this.streamMsgId = data.id
+      this.index++
+      return true
+    } catch {
+      this.failed = true
+      return false
+    }
+  }
+
+  /** 首片：input_state=1, index=0 */
+  async begin(openid: string, msgId: string, msgSeq: number, initialText: string): Promise<void> {
+    await this.post(openid, {
+      input_mode: "replace",
+      input_state: 1,
+      index: 0,
+      content_type: "markdown",
+      content_raw: initialText,
+      msg_id: msgId,
+      msg_seq: msgSeq,
+    })
+  }
+
+  /** 续片：全量正文 replace */
+  async update(fullText: string): Promise<void> {
+    if (this.failed || this.finished) return
+    await this.post(this.openidCache!, {
+      input_mode: "replace",
+      input_state: 1,
+      index: this.index,
+      content_type: "markdown",
+      content_raw: fullText,
+      ...(this.streamMsgId ? { stream_msg_id: this.streamMsgId } : {}),
+      msg_seq: this.msgSeqCache!,
+    })
+  }
+
+  /** 收尾片 */
+  async finish(fullText: string): Promise<void> {
+    if (this.failed || this.finished) return
+    await this.post(this.openidCache!, {
+      input_mode: "replace",
+      input_state: 10,
+      index: this.index,
+      content_type: "markdown",
+      content_raw: fullText,
+      ...(this.streamMsgId ? { stream_msg_id: this.streamMsgId } : {}),
+      msg_seq: this.msgSeqCache!,
+    })
+    this.finished = true
+  }
+
+  // begin 缓存会话级参数，供续片使用
+  private openidCache: string | null = null
+  private msgSeqCache: number | null = null
+}
+
+/** begin 需要缓存 openid/msgSeq —— 在 begin 开头加： */
+// this.openidCache = openid
+// this.msgSeqCache = msgSeq
+```
+
+注意：上面注释指出的两行必须真实写进 `begin()` 方法体首部（落地时移入），否则续片拿不到缓存。执行者直接把这两行放进 `begin()` 开头并删除该尾注。
+
+- [ ] **步骤 15.4：运行确认通过**
+
+运行：`bunx vitest run tests/qq/stream.test.ts`
+预期：4 个用例 PASS。
+
+- [ ] **步骤 15.5：index 接线（增量事件 → 流式通道）**
+
+在 `src/index.ts` 中：
+
+1. 导入 `StreamSender`。
+2. 新增流式注册表（模块级闭包内）：
+```ts
+const streams = new Map<string, { sender: StreamSender; lastLen: number; consumed: boolean }>()
+
+function beginStream(openid: string, msgId: string): void {
+  if (!cfg.streaming) return
+  const ref = passiveRefs.get(openid)
+  if (!ref) return
+  const sender = new StreamSender({ restBase, getToken: () => auth.getToken() })
+  streams.set(openid, { sender, lastLen: 0, consumed: false })
+  void sender.begin(openid, ref.msgId, /* seq 由 ack 已占 1 */ 2, "正在生成…")
+}
+
+function endStream(openid: string, fullText: string): boolean {
+  const ctx = streams.get(openid)
+  if (!ctx || ctx.sender.failed) {
+    streams.delete(openid)
+    return false // 回落普通回复
+  }
+  ctx.consumed = true
+  streams.delete(openid)
+  void ctx.sender.finish(fullText)
+  return true // 流式已送达全文，不再重复发最终回复
+}
+```
+
+3. 下行处理流程调整（gateway on.message 内）：
+   - ack 之后调用 `beginStream(msg.openid, msg.msgId)`；
+   - `sessions.dispatch(...)` 得到 answer 后：
+```ts
+const deliveredByStream = endStream(msg.openid, answer)
+if (!deliveredByStream) await replyTo(msg.openid, (notice ? `${notice}\n` : "") + answer)
+```
+
+4. hooks.event 里把增量事件交给一个处理器（放在 listeners 注册处之后）：
+```ts
+let assistantBuf = new Map<string, string>() // sessionID → 累计 assistant 文本
+listeners.push((e) => {
+  const p = e.properties ?? {}
+  const sid = String(p.sessionID ?? "")
+  if (e.type === "message.part.updated" && sid && sessions.isOurSession(sid)) {
+    const part = p.part as { type?: string; text?: string } | undefined
+    if (part?.type === "text") {
+      const prev = assistantBuf.get(sid) ?? ""
+      assistantBuf.set(sid, prev + (part.text ?? ""))
+    }
+    return
+  }
+  if (e.type === "session.idle" || e.type === "session.error") assistantBuf.delete(sid)
+})
+```
+   同时新增节流推送循环：每 1200ms 扫描 `assistantBuf`，对仍在 `streams` 里的 openid 计算 `fullText` 并 `sender.update(fullText)`（用 `setInterval`，dispose 时清理；文本为空则跳过）。openid 反查用 `sessions.snapshot()`。
+
+   说明：`message.part.updated` 的 part 文本可能是增量也可能是快照，不同版本行为有差异——接线代码按"追加"处理；若真机验证发现是快照语义，将 `prev + part.text` 改为 `part.text` 即可（验收清单已包含该项检查）。
+
+- [ ] **步骤 15.6：全量回归 + Commit**
+
+运行：`bunx vitest run` 然后 `bunx tsc --noEmit -p tsconfig.json`
+预期：全部通过。
+
+```bash
+git add src/ tests/
+git commit -m "feat: stream_messages 流式打字机输出"
+```
+
+---
+
+### 任务 16：扫码绑定 setup 命令
+
+**文件：**
+- 创建：`src/setup-core.ts`、`bin/setup.mjs`
+- 修改：`package.json`
+- 测试：`tests/setup-core.test.ts`
+
+- [ ] **步骤 16.1：编写 setup-core 失败测试**
+
+`tests/setup-core.test.ts`：
+```ts
+import { describe, expect, it } from "vitest"
+import { mergeCredentials } from "../src/setup-core"
+
+describe("mergeCredentials", () => {
+  it("合并凭据进已有配置并保留其他字段", () => {
+    const merged = JSON.parse(
+      mergeCredentials('{"sandbox":false,"allowlist":["X"]}', {
+        appId: "A",
+        appSecret: "S",
+      }),
+    )
+    expect(merged).toEqual({
+      appId: "A",
+      appSecret: "S",
+      sandbox: false,
+      allowlist: ["X"],
+    })
+  })
+  it("非法 JSON 视为空配置", () => {
+    const merged = JSON.parse(mergeCredentials("{broken", { appId: "A", appSecret: "S" }))
+    expect(merged.appId).toBe("A")
+  })
+})
+```
+
+- [ ] **步骤 16.2：运行确认失败**
+
+运行：`bunx vitest run tests/setup-core.test.ts`
+预期：FAIL。
+
+- [ ] **步骤 16.3：实现 setup-core**
+
+`src/setup-core.ts`：
+```ts
+export function mergeCredentials(existingRaw: string, creds: { appId: string; appSecret: string }): string {
+  let existing: Record<string, unknown> = {}
+  try {
+    existing = JSON.parse(existingRaw) as Record<string, unknown>
+  } catch {
+    existing = {}
+  }
+  existing.appId = creds.appId
+  existing.appSecret = creds.appSecret
+  return JSON.stringify(existing, null, 2)
+}
+```
+
+- [ ] **步骤 16.4：运行确认通过**
+
+运行：`bunx vitest run tests/setup-core.test.ts`
+预期：PASS。
+
+- [ ] **步骤 16.5：编写 bin 脚本**
+
+`bin/setup.mjs`（Node >= 18 可直接 `npx opencode-qq-setup` 运行；connector 包按需动态导入，未装则提示安装命令）：
+```js
+#!/usr/bin/env node
+import fs from "node:fs"
+import path from "node:path"
+import os from "node:os"
+
+const configDir = path.join(
+  process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"),
+  "opencode",
+)
+const configPath = path.join(configDir, "opencode-qq.json")
+
+let connector
+try {
+  connector = await import("@tencent-connect/qqbot-connector")
+} catch {
+  console.error("缺少依赖 @tencent-connect/qqbot-connector")
+  console.error("请先执行: npm install -g @tencent-connect/qqbot-connector")
+  process.exit(1)
+}
+
+console.log("请使用手机 QQ 扫描终端二维码完成绑定…")
+const credsList = await connector.qrConnect({ source: "opencode-qq" })
+const creds = credsList[0]
+if (!creds) {
+  console.error("扫码未返回凭据")
+  process.exit(1)
+}
+
+let existingRaw = "{}"
+try {
+  existingRaw = fs.readFileSync(configPath, "utf8")
+} catch {
+  /* 无配置文件视为空 */
+}
+
+const { mergeCredentials } = await import("../dist/setup-core.js")
+fs.mkdirSync(configDir, { recursive: true })
+fs.writeFileSync(configPath, mergeCredentials(existingRaw, creds))
+console.log(`凭据已写入 ${configPath}`)
+```
+
+`package.json` 修改（在 scripts 同级追加 bin 字段）：
+```json
+"bin": { "opencode-qq-setup": "./bin/setup.mjs" }
+```
+
+- [ ] **步骤 16.6：构建验证 + Commit**
+
+运行：`bun run build && node bin/setup.mjs --help 2>&1 || true`
+预期：构建成功；脚本因缺少 connector 包打印安装提示退出码 1（属预期行为）。
+
+```bash
+git add src/setup-core.ts bin/setup.mjs package.json tests/setup-core.test.ts
+git commit -m "feat: opencode-qq-setup 扫码绑定命令"
+```
+
+---
+
 ## 手动验收清单（发布前，需真实机器人凭据）
 
 1. 沙箱环境：QQ 手机端向机器人发"你好"→ 收到 ack → 收到 AI 回复。
@@ -1942,3 +2921,8 @@ git push origin master
 4. 让 opencode 执行一个需权限的命令（如 bash）→ QQ 收到 `[权限请求 #N]` → 回复"同意 N"→ opencode 继续执行 → QQ 收到"已批准"。
 5. 回复"拒绝 N" → opencode 中止该操作。
 6. 杀掉网络 30 秒再恢复 → 网关自动重连，期间完成的任务结果补发到 QQ。
+7. AI 回复为 markdown 渲染效果（标题/列表/链接）；将 `markdownReply:false` 后回退纯文本正常。
+8. 向机器人发送一张截图 → AI 能描述/分析图片内容（多模态链路）。
+9. 引用一条历史消息发"这条说的展开讲讲" → AI 能看到被引用文本并正确回应。
+10. 长回答观察流式打字机渐进输出；若发现最终内容重复或错乱，检查 `message.part.updated` 是增量还是快照语义（见任务 15 步骤 15.5 说明）并修正接线。
+11. `npx opencode-qq-setup` 扫码后凭据正确写入配置文件，插件重启后可用。

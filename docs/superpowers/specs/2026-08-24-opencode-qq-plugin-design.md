@@ -22,6 +22,12 @@
 | 推送事件 | session.idle、session.error、permission.asked 必开；工具进度可选（默认关） |
 | 权限审批 | 支持 QQ 回复审批（同意/拒绝） |
 | 分发 | npm 包发布，`opencode.json` 一行接入 |
+| 消息去重 | 按 dispatch 包 `id`（缺省用 `msg_id`）去重，官方明确同一消息可能多次推送（v0.1 纳入） |
+| 扫码绑定 | 提供 `opencode-qq-setup` 引导命令，基于官方 `@tencent-connect/qqbot-connector` 扫码获取凭据并写入配置（v0.1 纳入） |
+| Markdown 回复 | 单聊自定义 Markdown 已全量开放，AI 回复默认以 `msg_type=2` 发送，可配置关闭降级纯文本（v0.1 纳入） |
+| 图片接收 | 用户发来的图片经 `attachments` 下载后以 FilePart（data URL）喂给 opencode 多模态处理（v0.1 纳入） |
+| 流式输出 | 通过 `stream_messages` API 实现打字机效果：监听 `message.part.updated` 事件增量推送，replace 全量模式（v0.1 纳入） |
+| 引用消息 | 接收 `message_type=103` 时尽力提取被引用文本并入上下文（v0.1 纳入） |
 
 ### 前置条件（用户侧）
 
@@ -69,10 +75,14 @@ QQ 客户端(单聊) ⇄ QQ开放平台 ⇄ [WSS出站+REST] qq-gateway（openco
 ### 收发消息（C2C）
 
 - **收**：订阅 `C2C_MESSAGE_CREATE`，提取 `openid`、`content`、`msg_id`、`timestamp`。
-- **发**：`POST /v2/users/{openid}/messages`，文本 `msg_type=0`。
-- **被动回复窗口策略**：
+- **去重**：dispatch 包携带 `id`（事件 ID），以 `id ?? msg_id` 为键维护有上限的去重集合（FIFO，上限 1000），重复推送直接丢弃。
+- **图片接收**：事件 `attachments` 中 `content_type=image` 的项，下载后转 base64 data URL，与文本一并作为 opencode prompt 的 file part（`{type:"file", mime, url}`）提交。
+- **引用消息**：`message_type=103` 时尽力从 `msg_elements` 提取被引用文本，以"[引用] …"前缀并入 prompt（结构未完全文档化，做防御性解析）。
+- **发**：`POST {restBase}/v2/users/{openid}/messages`；默认 `msg_type=2` 携带 `markdown.content`（配置 `markdownReply:false` 时回退 `msg_type=0` 纯文本）；markdown 发送失败自动降级重试一次纯文本。
+- **流式输出**：AI 回复期间监听 opencode `message.part.updated` 增量事件，调用 `POST /v2/users/{openid}/stream_messages`：首片 `input_state=1, index=0` 取得 `stream_msg_id`；续片 `input_mode=replace` 全量正文、节流 ≥1s/片；`input_state=10` 收尾。失败（40007/50002/HTTP 错误）即放弃流式，回落到普通被动回复。流式成功时不再重复发送最终全文。
+- **被动回复窗口**：
   1. 收到消息立即回执"已收到，处理中…"（必在窗口内）；
-  2. 任务完成后若仍在窗口内则继续被动回复（引用原 `msg_id`）；超窗则尝试主动消息，无主动推送权限时降级为记日志，并在该用户下次来消息时附带说明。
+  2. 任务完成后若仍在窗口内则继续被动回复（引用原 `msg_id`，递增 `msg_seq`）；超窗则尝试主动消息，无主动推送权限时降级为记日志，并在该用户下次来消息时附带说明。单聊窗口 60 分钟、每条消息最多 4 条回复。
 - **频控**：发送队列串行化；遇 429 按 Retry-After 退避重试（最多 3 次）。
 
 ### 环境切换
@@ -83,7 +93,8 @@ QQ 客户端(单聊) ⇄ QQ开放平台 ⇄ [WSS出站+REST] qq-gateway（openco
 
 - 映射表 `openid → sessionID` 持久化到 `~/.config/opencode/opencode-qq-sessions.json`，opencode 重启后会话延续。
 - 该用户首条消息：`client.session.create()` 创建会话，标题取消息前 20 字；后续消息通过 SDK 向既有会话追加 prompt。
-- AI 回复完成后取最新 assistant 文本发回 QQ；超过 QQ 单条上限（约 2000 字节）自动截断分条发送。
+- prompt parts 组装：文本 part + 图片 file part（data URL）+ 引用文本前缀。
+- AI 回复完成后取最新 assistant 文本发回 QQ（流式模式下由流式通道送达，不再重复发送）；超过 QQ 单条上限自动截断分条发送。
 
 ### 内置指令（`/` 开头拦截，不进 AI）
 
@@ -122,12 +133,18 @@ QQ 客户端(单聊) ⇄ QQ开放平台 ⇄ [WSS出站+REST] qq-gateway（openco
   "appSecret": "xxx",
   "sandbox": true,
   "allowlist": [],
+  "model": "providerID/modelID",
+  "markdownReply": true,
+  "streaming": true,
   "events": { "toolProgress": false }
 }
 ```
 
 - 敏感信息可用 `QQ_BOT_APPID` / `QQ_BOT_APPSECRET` 环境变量替代文件配置；文档强调不得把 secret 提交进仓库。
 - `allowlist`：openid 数组；空数组 = 不限制（当前决策），非空则只处理白名单用户的消息。
+- `markdownReply`：AI 回复是否用 Markdown 格式发送，默认 true。
+- `streaming`：是否启用流式打字机输出，默认 true。
+- 凭据获取支持两种方式：手填配置文件/环境变量，或运行 `opencode-qq-setup` 扫码绑定（基于官方 `@tencent-connect/qqbot-connector` 的二维码授权，自动写入配置文件）。
 - 缺少必填配置时插件**静默禁用**并写日志，绝不影响 opencode 正常启动。
 
 ## 7. 错误处理
@@ -138,19 +155,21 @@ QQ 客户端(单聊) ⇄ QQ开放平台 ⇄ [WSS出站+REST] qq-gateway（openco
 
 ## 8. 测试策略
 
-- **单元测试**（vitest）：指令解析、会话映射持久化、审批编号配对、节流聚合逻辑。
-- **集成测试**：本地 mock QQ 网关（WebSocket 服务模拟事件下发、断言发送报文格式）。
-- **手动验收**：沙箱真机单聊全流程——普通对话、`/new`、`/status`、权限远程审批、断网重连续传。
+- **单元测试**（vitest）：指令解析、会话映射持久化、审批编号配对、节流聚合逻辑、长文分条、消息去重集合、markdown 降级重试、流式分片状态机（首片/续片/收尾/失败回落）、图片附件转 file part、引用文本防御性提取。
+- **集成测试**：本地 mock QQ 网关（WebSocket 服务模拟事件下发、断言发送报文格式、重复推送去重）。
+- **手动验收**：沙箱真机单聊全流程——普通对话、`/new`、`/status`、权限远程审批、发图片让 AI 看图回答、引用消息追问、流式打字机效果、断网重连续传。
 
 ## 9. 项目形态
 
 - TypeScript + Bun 开发，构建为标准 opencode 插件 npm 包，包名 `opencode-qq`。
-- README 包含完整接入指引：注册开放平台 → 创建机器人 → 配置沙箱 → 安装插件 → 填写凭据。
+- 附带 bin 命令 `opencode-qq-setup`：扫码绑定引导，获取凭据后合并写入 `~/.config/opencode/opencode-qq.json`（运行时依赖官方 connector 包按需动态导入，未安装时给出安装提示）。
+- README 包含完整接入指引：注册开放平台 → 创建机器人 → 配置沙箱 → 安装插件 → 填写凭据（或扫码绑定）。
 - 仓库根目录即插件源码；`docs/superpowers/specs/` 存放本设计文档。
 
 ## 10. 范围外（明确不做）
 
 - QQ 频道、群聊场景。
-- 图片/富媒体消息收发（首版纯文本）。
+- 富媒体**发送**（图片/视频/语音/文件上行给用户；接收图片已纳入）。
 - WebHook 回调模式。
 - 多机器人实例。
+- 互动召回消息、消息撤回。
