@@ -9,3 +9,4 @@ export const CONFIG_PATH = () =>
   `${process.env.XDG_CONFIG_HOME ?? `${process.env.HOME}/.config`}/opencode/opencode-qq.json`
 export const SESSIONS_PATH = () =>
   `${process.env.XDG_CONFIG_HOME ?? `${process.env.HOME}/.config`}/opencode/opencode-qq-sessions.json`
+export const GATEWAY_PATH = "/gateway"
