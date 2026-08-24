@@ -23,6 +23,8 @@ export class SessionManager {
     private bridge: OpencodeBridge,
     private persistPath: string,
     private fsMod: Pick<typeof fs, "readFileSync" | "writeFileSync"> = fs,
+    /** 终审 I4a：可选，返回某会话当前待审批数（/status 展示） */
+    private pendingCount?: (sessionId: string) => number,
   ) {
     try {
       const raw = JSON.parse(this.fsMod.readFileSync(persistPath, "utf8")) as Record<string, string>
@@ -96,7 +98,11 @@ export class SessionManager {
 
   private async statusReply(openid: string): Promise<string> {
     const sid = await this.getSessionId(openid)
-    return sid ? `当前会话: ${sid}\n状态: 已就绪` : "暂无会话，发任意消息即可开始。"
+    if (!sid) return "暂无会话，发任意消息即可开始。"
+    let reply = `当前会话: ${sid}\n状态: 已就绪`
+    const pending = this.pendingCount?.(sid)
+    if (pending !== undefined) reply += `\n待审批: ${pending} 条`
+    return reply
   }
 
   private persist(): void {

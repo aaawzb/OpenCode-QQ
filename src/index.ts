@@ -1,4 +1,5 @@
 import type { Plugin } from "@opencode-ai/plugin"
+import fs from "node:fs"
 import { Approver } from "./approver"
 import { loadConfig } from "./config"
 import { createGatewayUrlFetcher, QQGateway } from "./qq/gateway"
@@ -15,6 +16,8 @@ import {
   STREAM_FLUSH_INTERVAL_MS,
 } from "./constants"
 import { EventPusher } from "./event-pusher"
+import { toolExecuteAfterHook } from "./relay"
+import { AssistantTextBuffer } from "./stream-buffer"
 import { SessionManager, type OpencodeBridge } from "./session-manager"
 import { splitText } from "./util/chunk"
 import { guessImageMime, toImageDataUrl } from "./util/media"
@@ -82,12 +85,20 @@ export const QQBotPlugin: Plugin = async (input) => {
     },
   }
 
-  const sessions = new SessionManager(bridge, SESSIONS_PATH())
+  const sessions = new SessionManager(
+    bridge,
+    SESSIONS_PATH(),
+    fs,
+    (sid) => approver.countBySession(sid), // 终审 I4a：/status 附带待审批数
+  )
   // /new 重置会话时清空该会话的待审请求（规格第 5 节）
   bridge.onSessionReset = (sid) => approver.clearSession(sid)
 
   // ---- 事件订阅收集器（EventPusher 用）----
   const listeners: Array<(e: OcEvent) => void> = []
+
+  // 终审 C1：流式缓冲（delta 增量 / part.id 快照替换，仅 assistant 角色）
+  const assistantBuf = new AssistantTextBuffer((sid) => sessions.isOurSession(sid))
 
   const pusher = new EventPusher({
     isOurSession: (sid) => sessions.isOurSession(sid),
@@ -100,6 +111,7 @@ export const QQBotPlugin: Plugin = async (input) => {
       for (const part of splitText(text)) await api.sendC2C(openid, part)
     },
     toolProgress: cfg.events.toolProgress,
+    lastAssistantText: (sid) => assistantBuf.text(sid), // 终审 I4b
     subscribe: (h) => listeners.push(h),
   })
 
@@ -227,29 +239,22 @@ export const QQBotPlugin: Plugin = async (input) => {
   })
 
   // ---- 流式增量：assistant 文本累计 → 节流推送 stream_messages ----
-  // message.part.updated 的 part 文本按"增量追加"处理；若真机验证为快照语义，
-  // 将 prev + part.text 改为 part.text 即可（见简报步骤 15.5 说明）
-  const assistantBuf = new Map<string, string>() // sessionID → 累计 assistant 文本
+  // 终审 C1：message.part.updated 的 part 是全量快照、专用增量字段是 delta
+  // （SDK: EventMessagePartUpdated.properties = { part: Part; delta?: string }）。
+  // AssistantTextBuffer 优先消费 delta 做增量累计，delta 缺失时按 part.id 快照替换；
+  // 并通过 message.updated 建立的 messageID → role 映射只累计 assistant 消息文本。
   listeners.push((e) => {
-    const p = e.properties ?? {}
-    const sid = String(p.sessionID ?? "")
-    if (e.type === "message.part.updated" && sid && sessions.isOurSession(sid)) {
-      const part = p.part as { type?: string; text?: string } | undefined
-      if (part?.type === "text") {
-        const prev = assistantBuf.get(sid) ?? ""
-        assistantBuf.set(sid, prev + (part.text ?? ""))
-      }
-      return
+    assistantBuf.handle(e)
+    if (e.type === "session.idle" || e.type === "session.error") {
+      assistantBuf.clear(String(e.properties?.sessionID ?? ""))
     }
-    if (e.type === "session.idle" || e.type === "session.error") assistantBuf.delete(sid)
   })
 
   const flushTimer = setInterval(() => {
     const snapshot = sessions.snapshot()
-    for (const [sid, bufText] of assistantBuf) {
+    for (const [openid, sid] of Object.entries(snapshot)) {
+      const bufText = assistantBuf.text(sid)
       if (!bufText) continue
-      const openid = Object.keys(snapshot).find((o) => snapshot[o] === sid)
-      if (!openid) continue
       const ctx = streams.get(openid)
       if (!ctx || ctx.sender?.failed) continue
       if (!ctx.sender) {
@@ -271,9 +276,14 @@ export const QQBotPlugin: Plugin = async (input) => {
     event: async ({ event }) => {
       for (const h of listeners) h({ type: event.type, properties: event.properties ?? {} })
     },
+    // 终审 I1：tool.execute.after 是 Hooks 回调而非总线事件，这里合成总线形状
+    // 事件交给 listeners 分发，EventPusher 的节流推送据此触发
+    "tool.execute.after": toolExecuteAfterHook((e) => {
+      for (const h of listeners) h(e)
+    }),
     dispose: async () => {
       clearInterval(flushTimer)
-      assistantBuf.clear()
+      assistantBuf.clearAll()
       gateway.stop()
       pusher.dispose()
     },

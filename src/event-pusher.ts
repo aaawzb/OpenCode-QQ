@@ -9,9 +9,27 @@ export interface EventPusherDeps {
   toolProgress: boolean
   /** 测试可注入极小间隔；默认 60s */
   toolProgressIntervalMs?: number
+  /** 终审 I4b：session.idle 推送附带最后回复摘要（尾部 200 字符） */
+  lastAssistantText?: (sessionId: string) => string | null
 }
 
 const TOOL_PROGRESS_INTERVAL_MS = 60_000
+
+const ERROR_SUMMARY_MAX = 300
+
+/**
+ * 终审 I2：props.error 是结构化对象（如 {name:"UnknownError", data:{message}}），
+ * 直接 String() 会得到 "[object Object]"。按 data.message → name → String 链提取。
+ */
+function summarizeError(error: unknown): string {
+  if (error && typeof error === "object") {
+    const e = error as { name?: unknown; data?: { message?: unknown } }
+    const message = e.data && typeof e.data === "object" ? e.data.message : undefined
+    if (typeof message === "string" && message) return message.slice(0, ERROR_SUMMARY_MAX)
+    if (typeof e.name === "string" && e.name) return e.name.slice(0, ERROR_SUMMARY_MAX)
+  }
+  return String(error ?? "未知错误").slice(0, ERROR_SUMMARY_MAX)
+}
 
 export class EventPusher {
   private throttler: Throttler
@@ -55,11 +73,13 @@ export class EventPusher {
     if (!openid) return
 
     switch (evt.type) {
-      case "session.idle":
-        this.deliver(openid, "✅ 任务完成。")
+      case "session.idle": {
+        const tail = this.deps.lastAssistantText?.(sessionId)
+        this.deliver(openid, tail ? `✅ 任务完成。\n摘要: ${tail.slice(-200)}` : "✅ 任务完成。")
         break
+      }
       case "session.error": {
-        const err = String(props.error ?? "未知错误").slice(0, 300)
+        const err = summarizeError(props.error)
         this.deliver(openid, `❌ 出错: ${err}`)
         break
       }

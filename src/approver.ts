@@ -53,4 +53,11 @@ export class Approver {
       }
     }
   }
+
+  /** 终审 I4a：某会话当前待审批数量（供 /status 展示） */
+  countBySession(sessionId: string): number {
+    let n = 0
+    for (const item of this.pending.values()) if (item.sessionId === sessionId) n++
+    return n
+  }
 }

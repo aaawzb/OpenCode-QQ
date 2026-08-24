@@ -99,7 +99,17 @@ export class QQGateway {
     const url = await this.opts.getGatewayUrl()
     const ws = new WebSocket(url)
     this.ws = ws
-    ws.on("message", (raw) => this.handlePacket(JSON.parse(raw.toString())))
+    ws.on("message", (raw) => {
+      // 终审 I3：非 JSON 帧直接 JSON.parse 会抛异常击穿 opencode 进程，守卫后丢弃
+      let pkt: Packet
+      try {
+        pkt = JSON.parse(raw.toString()) as Packet
+      } catch (e) {
+        console.warn(`[opencode-qq] 丢弃非 JSON 网关帧: ${String(e).slice(0, 120)}`)
+        return
+      }
+      this.handlePacket(pkt)
+    })
     ws.on("close", () => {
       this.opts.disconnected()
       this.scheduleReconnect()

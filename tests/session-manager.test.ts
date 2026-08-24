@@ -83,6 +83,28 @@ describe("SessionManager.dispatch", () => {
     expect(reply).toContain("ses1")
   })
 
+  it("/status 有会话时附带待审批数（I4a）", async () => {
+    const client2 = makeClient()
+    const counts: Record<string, number> = { ses1: 2 }
+    const sm2 = new SessionManager(
+      client2,
+      "/tmp/f3",
+      makeFsStub() as never,
+      (sid) => counts[sid] ?? 0,
+    )
+    await sm2.dispatch("u1", "hi")
+    const reply = await sm2.dispatch("u1", "/status")
+    expect(reply).toContain("当前会话: ses1")
+    expect(reply).toContain("\n待审批: 2 条")
+  })
+
+  it("未注入 pendingCount 时 /status 不含待审批行且不报错（I4a 向后兼容）", async () => {
+    await sm.dispatch("u1", "hi")
+    const reply = await sm.dispatch("u1", "/status")
+    expect(reply).not.toContain("待审批")
+    expect(reply).toContain("ses1")
+  })
+
   it("映射持久化到文件，重启后恢复", async () => {
     const fsStub = makeFsStub()
     const sm1 = new SessionManager(client, "/tmp/persist.json", fsStub as never)

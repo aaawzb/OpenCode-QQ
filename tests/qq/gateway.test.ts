@@ -223,6 +223,44 @@ describe("QQGateway", () => {
     h.server.close()
   })
 
+  it("非 JSON 畸形帧被丢弃并告警，后续正常帧继续处理（I3）", async () => {
+    const h = await startMockGateway()
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const connected = vi.fn()
+    const gotMsg = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      connected,
+      disconnected: vi.fn(),
+      message: gotMsg,
+    })
+    gw.start()
+    await vi.waitFor(() => expect(connected).toHaveBeenCalled())
+    const client = h.lastClient()!
+    client.send("this is not json{{{") // 畸形帧：不得击穿进程
+    client.send("")
+
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled())
+    expect(gotMsg).not.toHaveBeenCalled()
+
+    // 后续正常帧仍能处理
+    client.send(
+      JSON.stringify({
+        op: 0,
+        s: 3,
+        t: "C2C_MESSAGE_CREATE",
+        d: { openid: "U9", content: "after garbage", msg_id: "M9", timestamp: "2026-01-01" },
+      }),
+    )
+    await vi.waitFor(() =>
+      expect(gotMsg).toHaveBeenCalledWith(expect.objectContaining({ openid: "U9", content: "after garbage" })),
+    )
+    gw.stop()
+    h.server.close()
+  })
+
   it("映射 attachments 与引用文本到 message 回调", async () => {
     const h = await startMockGateway()
     const gotMsg = vi.fn()
