@@ -87,7 +87,7 @@ QQ 客户端(单聊) ⇄ QQ开放平台 ⇄ [WSS出站+REST] qq-gateway（openco
 
 ### 环境切换
 
-- 配置 `sandbox: true/false` 切换沙箱/正式环境地址（沙箱：`https://sandbox.api.sgroup.qq.com`；正式：`https://api.bot.qq.com`）。开发调试默认沙箱。
+- 配置 `sandbox: true/false` 切换沙箱/正式环境地址（沙箱：`https://sandbox.api.sgroup.qq.com`；正式：`https://api.bot.qq.com`）。**默认正式环境**——快速创建通道的机器人仅能与管理员 QQ 单聊，等价天然白名单（用户决策 2026-08-24）。
 
 ## 4. 会话管理与指令（session-manager）
 

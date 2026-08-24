@@ -51,7 +51,7 @@ npx opencode-qq-setup
 {
   "appId": "你的AppID",
   "appSecret": "你的AppSecret",
-  "sandbox": true,
+  "sandbox": false,
   "allowlist": [],
   "model": "anthropic/claude-sonnet-4-5",
   "markdownReply": true,
@@ -63,7 +63,7 @@ npx opencode-qq-setup
 | 字段 | 默认 | 说明 |
 |------|------|------|
 | `appId` / `appSecret` | 必填 | 开放平台机器人凭据 |
-| `sandbox` | `true` | `true` 走沙箱环境（调试），`false` 走正式环境 |
+| `sandbox` | `false` | 默认走正式环境（快速创建的机器人本就只能与管理员 QQ 单聊，等价天然白名单）；需要沙箱调试时改 `true` 并在管理端配置沙箱单聊账号 |
 | `allowlist` | `[]` | openid 白名单，空数组 = 不限制；非空则仅处理白名单用户的消息 |
 | `model` | 无 | 覆盖模型，格式 `providerID/modelID`；不填则用 opencode 全局默认模型，两者都没有时对话会报错 |
 | `markdownReply` | `true` | AI 回复是否用 Markdown 发送 |
@@ -112,7 +112,7 @@ export QQ_BOT_APPSECRET=你的AppSecret
 
 - **被动消息窗口**：QQ 单聊被动回复窗口为收到消息后 60 分钟，且每条收到的消息最多回复 4 条。超窗后的推送（如长时间任务的完成通知）会尝试走主动消息，无权限时记日志并在该用户下次来消息时附带说明。
 - **主动消息限制**：主动消息受平台频控与额度约束，日常使用请以先发消息触发对话为主。
-- **沙箱与正式切换**：开发调试保持 `"sandbox": true`；提审上线前改为 `false` 切换到正式环境（记得配置 IP 白名单）。
+- **沙箱与正式切换**：默认即正式环境（`"sandbox": false`）。快速创建通道的机器人只能与管理员 QQ 单聊，天然受限，无需沙箱；若走完整入驻流程需要沙箱调试，改 `"sandbox": true` 并在管理端配置沙箱单聊账号。机器人提审上线后需在管理端配置 IP 白名单。
 - **流式输出语义**：流式通道每一片都是当前正文的**全量快照**（客户端整体替换显示），而非追加式增量；流式发送失败时自动回落为普通被动回复，不会丢内容。
 
 ## 开发

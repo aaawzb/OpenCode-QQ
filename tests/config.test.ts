@@ -11,13 +11,13 @@ describe("loadConfig", () => {
     const cfg = loadConfig("/nonexistent/path.json")
     expect(cfg).toBeNull()
   })
-  it("环境变量提供完整凭据时可用，默认 sandbox=true", async () => {
+  it("环境变量提供完整凭据时可用，默认走正式环境 sandbox=false", async () => {
     process.env.QQ_BOT_APPID = "111"
     process.env.QQ_BOT_APPSECRET = "sec"
     const cfg = loadConfig("/nonexistent/path.json")!
     expect(cfg.appId).toBe("111")
     expect(cfg.appSecret).toBe("sec")
-    expect(cfg.sandbox).toBe(true)
+    expect(cfg.sandbox).toBe(false)
     expect(cfg.allowlist).toEqual([])
     expect(cfg.events.toolProgress).toBe(false)
   })

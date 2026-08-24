@@ -30,7 +30,7 @@ export function loadConfig(path = CONFIG_PATH()): QQConfig | null {
   return {
     appId,
     appSecret,
-    sandbox: file.sandbox ?? true,
+    sandbox: file.sandbox ?? false,
     allowlist: file.allowlist ?? [],
     events: { toolProgress: file.events?.toolProgress ?? false },
     model: file.model,
