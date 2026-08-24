@@ -4,6 +4,7 @@ import { loadConfig } from "./config"
 import { createGatewayUrlFetcher, QQGateway } from "./qq/gateway"
 import { QQApi } from "./qq/api"
 import { AuthManager } from "./qq/auth"
+import { StreamSender } from "./qq/stream"
 import {
   SESSIONS_PATH,
   REST_BASE_PROD,
@@ -11,6 +12,7 @@ import {
   INTENT_GROUP_AND_C2C,
   APPROVAL_TIMEOUT_MS,
   PASSIVE_WINDOW_MS,
+  STREAM_FLUSH_INTERVAL_MS,
 } from "./constants"
 import { EventPusher } from "./event-pusher"
 import { SessionManager, type OpencodeBridge } from "./session-manager"
@@ -105,6 +107,28 @@ export const QQBotPlugin: Plugin = async (input) => {
   const passiveRefs = new Map<string, { msgId: string; receivedAt: number }>() // openid → 最近一条
   const pendingNotice = new Map<string, string>() // openid → 超窗未送达说明
 
+  // ---- 流式输出（stream_messages 打字机）----
+  const streams = new Map<string, { sender: StreamSender; lastLen: number; consumed: boolean }>()
+
+  const beginStream = (openid: string, msgId: string): void => {
+    if (!cfg.streaming) return
+    const ref = passiveRefs.get(openid)
+    if (!ref) return
+    const sender = new StreamSender({ restBase, getToken: () => auth.getToken() })
+    streams.set(openid, { sender, lastLen: 0, consumed: false })
+    void sender.begin(openid, ref.msgId, /* seq 由 ack 已占 1 */ 2, "正在生成…")
+  }
+
+  /** 返回 true 表示流式已送达全文，无需再发普通回复 */
+  function endStream(openid: string, fullText: string): boolean {
+    const ctx = streams.get(openid)
+    streams.delete(openid)
+    if (!ctx || ctx.sender.failed) return false // 回落普通回复
+    ctx.consumed = true
+    void ctx.sender.finish(fullText)
+    return true
+  }
+
   async function replyTo(openid: string, text: string, format: "text" | "markdown" = "text"): Promise<void> {
     const ref = passiveRefs.get(openid)
     const chunks = splitText(text)
@@ -162,9 +186,14 @@ export const QQBotPlugin: Plugin = async (input) => {
           (msg.quotedText ? `[引用消息] ${msg.quotedText}\n` : "") +
           (files.length ? `[图片 x${files.length}] ` : "") +
           msg.content
+        beginStream(msg.openid, msg.msgId)
         const answer = await sessions.dispatch(msg.openid, promptText, files)
-        await replyTo(msg.openid, (notice ? `${notice}\n` : "") + answer, cfg.markdownReply ? "markdown" : "text")
+        const deliveredByStream = endStream(msg.openid, answer)
+        if (!deliveredByStream) {
+          await replyTo(msg.openid, (notice ? `${notice}\n` : "") + answer, cfg.markdownReply ? "markdown" : "text")
+        }
       } catch (e) {
+        streams.delete(msg.openid) // 异常终止时清理流式会话，避免悬挂
         await replyTo(msg.openid, `处理失败: ${String(e).slice(0, 200)}`).catch(() => {})
       }
     },
@@ -186,6 +215,38 @@ export const QQBotPlugin: Plugin = async (input) => {
     if (openid) void replyTo(openid, approver.render(seq))
   })
 
+  // ---- 流式增量：assistant 文本累计 → 节流推送 stream_messages ----
+  // message.part.updated 的 part 文本按"增量追加"处理；若真机验证为快照语义，
+  // 将 prev + part.text 改为 part.text 即可（见简报步骤 15.5 说明）
+  const assistantBuf = new Map<string, string>() // sessionID → 累计 assistant 文本
+  listeners.push((e) => {
+    const p = e.properties ?? {}
+    const sid = String(p.sessionID ?? "")
+    if (e.type === "message.part.updated" && sid && sessions.isOurSession(sid)) {
+      const part = p.part as { type?: string; text?: string } | undefined
+      if (part?.type === "text") {
+        const prev = assistantBuf.get(sid) ?? ""
+        assistantBuf.set(sid, prev + (part.text ?? ""))
+      }
+      return
+    }
+    if (e.type === "session.idle" || e.type === "session.error") assistantBuf.delete(sid)
+  })
+
+  const flushTimer = setInterval(() => {
+    const snapshot = sessions.snapshot()
+    for (const [sid, bufText] of assistantBuf) {
+      if (!bufText) continue
+      const openid = Object.keys(snapshot).find((o) => snapshot[o] === sid)
+      if (!openid) continue
+      const ctx = streams.get(openid)
+      if (!ctx || ctx.sender.failed || ctx.consumed) continue
+      if (bufText.length <= ctx.lastLen) continue // 无新增内容不重发
+      ctx.lastLen = bufText.length
+      void ctx.sender.update(bufText)
+    }
+  }, STREAM_FLUSH_INTERVAL_MS)
+
   gateway.start()
 
   return {
@@ -193,6 +254,8 @@ export const QQBotPlugin: Plugin = async (input) => {
       for (const h of listeners) h({ type: event.type, properties: event.properties ?? {} })
     },
     dispose: async () => {
+      clearInterval(flushTimer)
+      assistantBuf.clear()
       gateway.stop()
       pusher.dispose()
     },
