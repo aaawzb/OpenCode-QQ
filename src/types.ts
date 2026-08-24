@@ -3,6 +3,8 @@ export interface IncomingC2CMessage {
   content: string
   msgId: string
   timestamp: number
+  attachments?: Array<{ contentType: string; url: string; filename?: string }>
+  quotedText?: string
 }
 
 export interface SendOptions {
