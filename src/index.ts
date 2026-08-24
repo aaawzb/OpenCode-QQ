@@ -107,25 +107,35 @@ export const QQBotPlugin: Plugin = async (input) => {
   const passiveRefs = new Map<string, { msgId: string; receivedAt: number }>() // openid → 最近一条
   const pendingNotice = new Map<string, string>() // openid → 超窗未送达说明
 
-  // ---- 流式输出（stream_messages 打字机）----
-  const streams = new Map<string, { sender: StreamSender; lastLen: number; consumed: boolean }>()
+  // ---- 流式输出（stream_messages 打字机，延迟 begin）----
+  // 不再用占位文本提前 begin：监听到首批增量后才创建 sender 并以该批文本为首片，
+  // 保证后续 replace 全量正文以上游已下发前缀开头（否则 40007）
+  interface StreamCtx {
+    sender: StreamSender | null
+    msgId: string
+    lastLen: number
+  }
+  const streams = new Map<string, StreamCtx>()
 
-  const beginStream = (openid: string, msgId: string): void => {
-    if (!cfg.streaming) return
+  /** 登记流式意图并返回句柄；返回 null 表示本次不启用流式 */
+  const beginStream = (openid: string): StreamCtx | null => {
+    if (!cfg.streaming) return null
     const ref = passiveRefs.get(openid)
-    if (!ref) return
-    const sender = new StreamSender({ restBase, getToken: () => auth.getToken() })
-    streams.set(openid, { sender, lastLen: 0, consumed: false })
-    void sender.begin(openid, ref.msgId, /* seq 由 ack 已占 1 */ 2, "正在生成…")
+    if (!ref) return null
+    const old = streams.get(openid)
+    if (old?.sender) old.sender.failed = true // 重入保护：旧流作废，其排队报文与收尾全部失效
+    const ctx: StreamCtx = { sender: null, msgId: ref.msgId, lastLen: 0 }
+    streams.set(openid, ctx)
+    return ctx
   }
 
-  /** 返回 true 表示流式已送达全文，无需再发普通回复 */
-  function endStream(openid: string, fullText: string): boolean {
+  /** 返回 true 表示流式已送达全文，无需再发普通回复；handle 用于归属校验防误收尾 */
+  const endStream = (openid: string, fullText: string, handle: StreamCtx | null): boolean => {
     const ctx = streams.get(openid)
+    if (!handle || ctx !== handle) return false // 已被更新的消息覆盖，不碰新流
     streams.delete(openid)
-    if (!ctx || ctx.sender.failed) return false // 回落普通回复
-    ctx.consumed = true
-    void ctx.sender.finish(fullText)
+    if (!handle.sender || handle.sender.failed) return false // 无增量或失败 → 回落普通回复
+    void handle.sender.finish(fullText)
     return true
   }
 
@@ -149,6 +159,7 @@ export const QQBotPlugin: Plugin = async (input) => {
     connected: () => pusher.setOnline(true),
     disconnected: () => pusher.setOnline(false),
     message: async (msg) => {
+      let stream: StreamCtx | null = null
       try {
         if (allowSet.size > 0 && !allowSet.has(msg.openid)) return
         passiveRefs.set(msg.openid, { msgId: msg.msgId, receivedAt: Date.now() })
@@ -186,14 +197,14 @@ export const QQBotPlugin: Plugin = async (input) => {
           (msg.quotedText ? `[引用消息] ${msg.quotedText}\n` : "") +
           (files.length ? `[图片 x${files.length}] ` : "") +
           msg.content
-        beginStream(msg.openid, msg.msgId)
+        stream = beginStream(msg.openid)
         const answer = await sessions.dispatch(msg.openid, promptText, files)
-        const deliveredByStream = endStream(msg.openid, answer)
+        const deliveredByStream = endStream(msg.openid, answer, stream)
         if (!deliveredByStream) {
           await replyTo(msg.openid, (notice ? `${notice}\n` : "") + answer, cfg.markdownReply ? "markdown" : "text")
         }
       } catch (e) {
-        streams.delete(msg.openid) // 异常终止时清理流式会话，避免悬挂
+        if (stream && streams.get(msg.openid) === stream) streams.delete(msg.openid) // 仅清理仍归属本次的流
         await replyTo(msg.openid, `处理失败: ${String(e).slice(0, 200)}`).catch(() => {})
       }
     },
@@ -240,7 +251,14 @@ export const QQBotPlugin: Plugin = async (input) => {
       const openid = Object.keys(snapshot).find((o) => snapshot[o] === sid)
       if (!openid) continue
       const ctx = streams.get(openid)
-      if (!ctx || ctx.sender.failed || ctx.consumed) continue
+      if (!ctx || ctx.sender?.failed) continue
+      if (!ctx.sender) {
+        // 延迟 begin：首批累计文本即首片，此后全量正文天然以其为前缀
+        ctx.sender = new StreamSender(
+          { restBase, getToken: () => auth.getToken() },
+          { openid, msgId: ctx.msgId, msgSeq: /* seq 由 ack 已占 1 */ 2 },
+        )
+      }
       if (bufText.length <= ctx.lastLen) continue // 无新增内容不重发
       ctx.lastLen = bufText.length
       void ctx.sender.update(bufText)
