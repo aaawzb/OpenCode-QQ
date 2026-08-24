@@ -5,6 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": { "opencode-qq-setup": "./bin/setup.mjs" },
   "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
