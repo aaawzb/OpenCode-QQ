@@ -19,7 +19,7 @@ function makeClient(existingSessions: Record<string, { id: string }> = {}) {
   return {
     sessions: existingSessions,
     createdTitles: [] as string[],
-    prompted: [] as { id: string; text: string; noReply: boolean }[],
+    prompted: [] as { id: string; text: string; noReply: boolean; files?: Array<{ mime: string; dataUrl: string }> }[],
     model: { providerID: "anthropic", modelID: "claude-test" },
     async sessionCreate(title: string) {
       const id = `ses${nextId++}`
@@ -27,8 +27,8 @@ function makeClient(existingSessions: Record<string, { id: string }> = {}) {
       this.sessions[id] = { id }
       return { id }
     },
-    async sessionPrompt(id: string, text: string, noReply: boolean) {
-      this.prompted.push({ id, text, noReply })
+    async sessionPrompt(id: string, text: string, noReply: boolean, files?: Array<{ mime: string; dataUrl: string }>) {
+      this.prompted.push({ id, text, noReply, files })
       if (noReply) return { parts: [] }
       return { parts: [{ type: "text", text: `AI 回复:${text}` }] }
     },
@@ -115,5 +115,11 @@ describe("SessionManager.dispatch", () => {
     const oldId = (await sm2.getSessionId("u1"))!
     await sm2.dispatch("u1", "/new")
     expect(resets).toEqual([oldId])
+  })
+
+  it("dispatch 把图片透传给 bridge.sessionPrompt", async () => {
+    await sm.dispatch("u7", "先建会话")
+    await sm.dispatch("u7", "看图", [{ mime: "image/png", dataUrl: "data:image/png;base64,xx" }])
+    expect(client.prompted.at(-1)?.files).toEqual([{ mime: "image/png", dataUrl: "data:image/png;base64,xx" }])
   })
 })

@@ -15,6 +15,7 @@ import {
 import { EventPusher } from "./event-pusher"
 import { SessionManager, type OpencodeBridge } from "./session-manager"
 import { splitText } from "./util/chunk"
+import { guessImageMime, toImageDataUrl } from "./util/media"
 
 type OcEvent = { type: string; properties: Record<string, unknown> }
 
@@ -47,7 +48,7 @@ export const QQBotPlugin: Plugin = async (input) => {
       const res = await input.client.session.create({ body: { title } })
       return { id: res.data!.id }
     },
-    async sessionPrompt(id, text, noReply) {
+    async sessionPrompt(id, text, noReply, files) {
       if (!cachedModel) {
         if (cfg.model) {
           const [providerID, modelID] = cfg.model.split("/")
@@ -65,7 +66,10 @@ export const QQBotPlugin: Plugin = async (input) => {
         body: {
           model: cachedModel,
           noReply,
-          parts: [{ type: "text", text }],
+          parts: [
+            { type: "text", text },
+            ...(files ?? []).map((f) => ({ type: "file" as const, mime: f.mime, url: f.dataUrl })),
+          ],
         },
       })
       return { parts: (res.data as { parts?: Array<{ type: string; text?: string }> } | undefined)?.parts ?? [] }
@@ -101,13 +105,13 @@ export const QQBotPlugin: Plugin = async (input) => {
   const passiveRefs = new Map<string, { msgId: string; receivedAt: number }>() // openid → 最近一条
   const pendingNotice = new Map<string, string>() // openid → 超窗未送达说明
 
-  async function replyTo(openid: string, text: string): Promise<void> {
+  async function replyTo(openid: string, text: string, format: "text" | "markdown" = "text"): Promise<void> {
     const ref = passiveRefs.get(openid)
     const chunks = splitText(text)
     for (const chunk of chunks) {
       const usePassive = !!ref && Date.now() - ref.receivedAt < PASSIVE_WINDOW_MS
       try {
-        await api.sendC2C(openid, chunk, usePassive ? { msgId: ref!.msgId } : {})
+        await api.sendC2C(openid, chunk, usePassive ? { msgId: ref!.msgId, format } : { format })
       } catch {
         if (!usePassive) pendingNotice.set(openid, "（此前有未能送达的消息）")
       }
@@ -144,8 +148,22 @@ export const QQBotPlugin: Plugin = async (input) => {
 
         const notice = pendingNotice.get(msg.openid)
         pendingNotice.delete(msg.openid)
-        const answer = await sessions.dispatch(msg.openid, msg.content)
-        await replyTo(msg.openid, (notice ? `${notice}\n` : "") + answer)
+
+        // 附件下载为 data URL（多模态 file part），失败降级为纯文字
+        const files: Array<{ mime: string; dataUrl: string }> = []
+        for (const att of msg.attachments ?? []) {
+          try {
+            files.push({ mime: guessImageMime(att.url), dataUrl: await toImageDataUrl(att.url) })
+          } catch {
+            await replyTo(msg.openid, "⚠️ 图片下载失败，仅处理文字部分").catch(() => {})
+          }
+        }
+        const promptText =
+          (msg.quotedText ? `[引用消息] ${msg.quotedText}\n` : "") +
+          (files.length ? `[图片 x${files.length}] ` : "") +
+          msg.content
+        const answer = await sessions.dispatch(msg.openid, promptText, files)
+        await replyTo(msg.openid, (notice ? `${notice}\n` : "") + answer, cfg.markdownReply ? "markdown" : "text")
       } catch (e) {
         await replyTo(msg.openid, `处理失败: ${String(e).slice(0, 200)}`).catch(() => {})
       }

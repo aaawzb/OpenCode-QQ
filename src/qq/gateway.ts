@@ -1,6 +1,7 @@
 import WebSocket from "ws"
 import { GATEWAY_PATH } from "../constants"
 import type { GatewayEvents, IncomingC2CMessage } from "../types"
+import { extractQuotedText } from "../util/quote"
 
 const OP_DISPATCH = 0
 const OP_HEARTBEAT = 1
@@ -174,11 +175,22 @@ export class QQGateway {
       return
     }
     if (t === "C2C_MESSAGE_CREATE") {
+      const rawAttachments = Array.isArray(d.attachments) ? d.attachments : []
       this.opts.message({
         openid: String(d.openid ?? ""),
         content: String(d.content ?? ""),
         msgId: String(d.msg_id ?? ""),
         timestamp: Date.parse(String(d.timestamp ?? "")) || Date.now(),
+        attachments: rawAttachments
+          .filter((a): a is Record<string, unknown> => !!a && typeof a === "object")
+          .filter((a) => String(a.content_type ?? a.contentType ?? "") === "image" || String(a.url ?? "").match(/\.(png|jpe?g|gif|webp)/i))
+          .map((a) => ({
+            contentType: "image",
+            url: String(a.url ?? ""),
+            filename: a.filename === undefined ? undefined : String(a.filename),
+          }))
+          .filter((a) => a.url),
+        quotedText: extractQuotedText(d),
       })
     }
   }

@@ -9,6 +9,7 @@ export interface OpencodeBridge {
     id: string,
     text: string,
     noReply: boolean,
+    files?: Array<{ mime: string; dataUrl: string }>,
   ): Promise<{ parts: Array<{ type: string; text?: string }> }>
   resolveModel(): Promise<{ providerID: string; modelID: string }>
   /** 可选：会话被 /new 重置时通知（index.ts 用它清空待审请求） */
@@ -52,7 +53,11 @@ export class SessionManager {
   }
 
   /** 返回要发回 QQ 的文本 */
-  async dispatch(openid: string, text: string): Promise<string> {
+  async dispatch(
+    openid: string,
+    text: string,
+    files: Array<{ mime: string; dataUrl: string }> = [],
+  ): Promise<string> {
     const cmd = parseCommand(text)
     if (cmd) {
       switch (cmd.type) {
@@ -81,7 +86,7 @@ export class SessionManager {
       this.persist()
       await this.bridge.sessionPrompt(sessionId, "以下用户将通过 QQ 单聊与你对话，回答请精炼。", true)
     }
-    const result = await this.bridge.sessionPrompt(sessionId, text, false)
+    const result = await this.bridge.sessionPrompt(sessionId, text, false, files)
     const out = result.parts
       .filter((p) => p.type === "text" && typeof p.text === "string")
       .map((p) => p.text)

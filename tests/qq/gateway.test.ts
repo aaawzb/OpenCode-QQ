@@ -40,6 +40,13 @@ async function startMockGateway(): Promise<Harness> {
   return h
 }
 
+async function firstClient(h: Harness): Promise<WsSocket> {
+  await vi.waitFor(() => {
+    if (!h.lastClient()) throw new Error("no client yet")
+  })
+  return h.lastClient()!
+}
+
 afterEach(() => vi.restoreAllMocks())
 
 describe("QQGateway", () => {
@@ -57,7 +64,7 @@ describe("QQGateway", () => {
     })
     gw.start()
     await vi.waitFor(() => expect(gotReady).toHaveBeenCalled())
-    const client = h.lastClient()!
+    const client = await firstClient(h)
     client.send(
       JSON.stringify({
         op: 0,
@@ -89,7 +96,7 @@ describe("QQGateway", () => {
     })
     gw.start()
     await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(1))
-    h.lastClient()!.close()
+    ;(await firstClient(h)).close()
     await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(2), { timeout: 5000 })
     gw.stop()
     h.server.close()
@@ -212,6 +219,37 @@ describe("QQGateway", () => {
     client.send(JSON.stringify({ ...dup, s: 6 })) // 同 id 重推
     await new Promise((r) => setTimeout(r, 100))
     expect(gotMsg).toHaveBeenCalledTimes(1) // 未增加
+    gw.stop()
+    h.server.close()
+  })
+
+  it("映射 attachments 与引用文本到 message 回调", async () => {
+    const h = await startMockGateway()
+    const gotMsg = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      connected: vi.fn(),
+      message: gotMsg,
+      disconnected: vi.fn(),
+    })
+    gw.start()
+    const client = await firstClient(h)
+    client.send(JSON.stringify({
+      op: 0, s: 9, t: "C2C_MESSAGE_CREATE",
+      id: "EVT-ATT-1",
+      d: {
+        openid: "U2", content: "看看这个", msg_id: "M2", timestamp: "2026-01-01",
+        attachments: [{ content_type: "image", url: "https://cdn/x.png" }],
+        message_type: 103,
+        msg_elements: [{ text_element: { content: "原图内容" } }],
+      },
+    }))
+    await vi.waitFor(() => expect(gotMsg).toHaveBeenCalled())
+    const msg = gotMsg.mock.calls[0][0]
+    expect(msg.attachments).toEqual([{ contentType: "image", url: "https://cdn/x.png", filename: undefined }])
+    expect(msg.quotedText).toBe("原图内容")
     gw.stop()
     h.server.close()
   })
