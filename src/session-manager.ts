@@ -40,6 +40,10 @@ export class SessionManager {
     return false
   }
 
+  snapshot(): Record<string, string> {
+    return Object.fromEntries(this.map)
+  }
+
   reset(openid: string): void {
     const sid = this.map.get(openid)
     this.map.delete(openid)
