@@ -1,5 +1,5 @@
 import fs from "node:fs"
-import { parseCommand } from "./commands"
+import { parseCommand } from "./commands.js"
 
 /** opencode client 的最小交互面（index.ts 负责适配真实 SDK） */
 export interface OpencodeBridge {

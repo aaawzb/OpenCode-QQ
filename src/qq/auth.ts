@@ -1,4 +1,4 @@
-import { TOKEN_URL } from "../constants"
+import { TOKEN_URL } from "../constants.js"
 
 export class AuthManager {
   private token: string | null = null

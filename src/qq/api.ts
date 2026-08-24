@@ -1,5 +1,5 @@
-import { MAX_REPLIES_PER_MSG_ID } from "../constants"
-import type { SendOptions } from "../types"
+import { MAX_REPLIES_PER_MSG_ID } from "../constants.js"
+import type { SendOptions } from "../types.js"
 
 interface QQApiOptions {
   restBase: string

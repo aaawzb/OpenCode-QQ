@@ -1,4 +1,4 @@
-import { Throttler } from "./util/throttle"
+import { Throttler } from "./util/throttle.js"
 
 export interface EventPusherDeps {
   isOurSession(sessionId: string): boolean

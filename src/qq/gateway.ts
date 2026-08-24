@@ -1,7 +1,7 @@
 import WebSocket from "ws"
-import { GATEWAY_PATH } from "../constants"
-import type { GatewayEvents, IncomingC2CMessage } from "../types"
-import { extractQuotedText } from "../util/quote"
+import { GATEWAY_PATH } from "../constants.js"
+import type { GatewayEvents, IncomingC2CMessage } from "../types.js"
+import { extractQuotedText } from "../util/quote.js"
 
 const OP_DISPATCH = 0
 const OP_HEARTBEAT = 1

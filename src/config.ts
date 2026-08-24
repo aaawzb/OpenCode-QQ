@@ -1,5 +1,5 @@
 import fs from "node:fs"
-import { CONFIG_PATH } from "./constants"
+import { CONFIG_PATH } from "./constants.js"
 
 export interface QQConfig {
   appId: string

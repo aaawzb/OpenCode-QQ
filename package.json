@@ -5,18 +5,36 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "bin": { "opencode-qq-setup": "./bin/setup.mjs" },
-  "files": ["dist", "README.md"],
+  "bin": {
+    "opencode-qq-setup": "./bin/setup.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "prepublishOnly": "npm run build && npm test"
   },
-  "keywords": ["opencode", "opencode-plugin", "qq", "bot"],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "qq",
+    "bot"
+  ],
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/aaawzb/opencode-qq.git" },
-  "bugs": { "url": "https://github.com/aaawzb/opencode-qq/issues" },
-  "dependencies": { "ws": "^8.18.0" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aaawzb/opencode-qq.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aaawzb/opencode-qq/issues"
+  },
+  "dependencies": {
+    "opencode-qq": "^0.1.0",
+    "ws": "^8.18.0"
+  },
   "devDependencies": {
     "@opencode-ai/plugin": "latest",
     "@types/ws": "^8.5.0",

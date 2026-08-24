@@ -1,11 +1,11 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import fs from "node:fs"
-import { Approver } from "./approver"
-import { loadConfig } from "./config"
-import { createGatewayUrlFetcher, QQGateway } from "./qq/gateway"
-import { QQApi } from "./qq/api"
-import { AuthManager } from "./qq/auth"
-import { StreamSender } from "./qq/stream"
+import { Approver } from "./approver.js"
+import { loadConfig } from "./config.js"
+import { createGatewayUrlFetcher, QQGateway } from "./qq/gateway.js"
+import { QQApi } from "./qq/api.js"
+import { AuthManager } from "./qq/auth.js"
+import { StreamSender } from "./qq/stream.js"
 import {
   SESSIONS_PATH,
   REST_BASE_PROD,
@@ -14,13 +14,13 @@ import {
   APPROVAL_TIMEOUT_MS,
   PASSIVE_WINDOW_MS,
   STREAM_FLUSH_INTERVAL_MS,
-} from "./constants"
-import { EventPusher } from "./event-pusher"
-import { toolExecuteAfterHook } from "./relay"
-import { AssistantTextBuffer } from "./stream-buffer"
-import { SessionManager, type OpencodeBridge } from "./session-manager"
-import { splitText } from "./util/chunk"
-import { guessImageMime, toImageDataUrl } from "./util/media"
+} from "./constants.js"
+import { EventPusher } from "./event-pusher.js"
+import { toolExecuteAfterHook } from "./relay.js"
+import { AssistantTextBuffer } from "./stream-buffer.js"
+import { SessionManager, type OpencodeBridge } from "./session-manager.js"
+import { splitText } from "./util/chunk.js"
+import { guessImageMime, toImageDataUrl } from "./util/media.js"
 
 type OcEvent = { type: string; properties: Record<string, unknown> }
 
