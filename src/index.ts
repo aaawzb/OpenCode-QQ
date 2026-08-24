@@ -165,7 +165,7 @@ export const QQBotPlugin: Plugin = async (input) => {
   }
 
   const gateway = new QQGateway({
-    getGatewayUrl: createGatewayUrlFetcher(restBase),
+    getGatewayUrl: createGatewayUrlFetcher(restBase, () => auth.getToken()),
     getToken: () => auth.getToken(),
     intents: INTENT_GROUP_AND_C2C,
     connected: () => pusher.setOnline(true),

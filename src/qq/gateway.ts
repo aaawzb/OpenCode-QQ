@@ -206,9 +206,21 @@ export class QQGateway {
   }
 }
 
-export function createGatewayUrlFetcher(restBase: string, fetchFn: typeof fetch = fetch) {
+export function createGatewayUrlFetcher(
+  restBase: string,
+  getToken?: () => Promise<string>,
+  fetchFn: typeof fetch = fetch,
+) {
   return async (): Promise<string> => {
-    const res = await fetchFn(`${restBase}${GATEWAY_PATH}`)
+    const headers: Record<string, string> = {}
+    if (getToken) {
+      // /gateway 与其他 OpenAPI 一致需要鉴权，缺失时正式环境会 401/挂起
+      headers.Authorization = `QQBot ${await getToken()}`
+    }
+    const res = await fetchFn(`${restBase}${GATEWAY_PATH}`, {
+      headers,
+      signal: AbortSignal.timeout(10_000),
+    })
     if (!res.ok) throw new Error(`get gateway failed: HTTP ${res.status}`)
     return ((await res.json()) as { url: string }).url
   }
