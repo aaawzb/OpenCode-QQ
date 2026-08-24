@@ -63,7 +63,7 @@ QQ 客户端(单聊) ⇄ QQ开放平台 ⇄ [WSS出站+REST] qq-gateway（openco
 
 ### 认证
 
-- 用 AppID + AppSecret `POST https://bots.qq.com/app/getAppAccessToken` 换取 access_token。
+- 用 AppID + AppSecret `POST https://api.bot.qq.com/app/getAppAccessToken` 换取 access_token（2026 版统一域名）。
 - token 到期前 60 秒自动刷新；token 只存内存，不落盘。
 
 ### WSS 连接
@@ -87,7 +87,7 @@ QQ 客户端(单聊) ⇄ QQ开放平台 ⇄ [WSS出站+REST] qq-gateway（openco
 
 ### 环境切换
 
-- 配置 `sandbox: true/false` 切换沙箱/正式环境地址（沙箱：`https://sandbox.api.sgroup.qq.com`；正式：`https://api.sgroup.qq.com`）。开发调试默认沙箱。
+- 配置 `sandbox: true/false` 切换沙箱/正式环境地址（沙箱：`https://sandbox.api.sgroup.qq.com`；正式：`https://api.bot.qq.com`）。开发调试默认沙箱。
 
 ## 4. 会话管理与指令（session-manager）
 
