@@ -11,6 +11,10 @@ export interface QQConfig {
   events: { toolProgress: boolean }
   /** 可选，"providerID/modelID"，如 anthropic/claude-sonnet-4-5 */
   model?: string
+  /** AI 回复是否用 Markdown 格式发送，默认 true */
+  markdownReply: boolean
+  /** 是否启用流式打字机输出，默认 true */
+  streaming: boolean
 }
 
 export function loadConfig(path = CONFIG_PATH()): QQConfig | null {
@@ -30,5 +34,7 @@ export function loadConfig(path = CONFIG_PATH()): QQConfig | null {
     allowlist: file.allowlist ?? [],
     events: { toolProgress: file.events?.toolProgress ?? false },
     model: file.model,
+    markdownReply: file.markdownReply ?? true,
+    streaming: file.streaming ?? true,
   }
 }

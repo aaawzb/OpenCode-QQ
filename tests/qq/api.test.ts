@@ -56,4 +56,24 @@ describe("QQApi.sendC2C", () => {
     expect(JSON.parse(fetchFn.mock.calls[3][1].body).msg_id).toBe("MSG9")
     expect(JSON.parse(fetchFn.mock.calls[4][1].body).msg_id).toBeUndefined()
   })
+
+  it("format=markdown 发送 msg_type=2 且失败降级为纯文本重试一次", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("", { status: 400 }))
+      .mockResolvedValueOnce(okJson({ id: "m" }))
+    const api = new QQApi({
+      restBase: "https://api.bot.qq.com",
+      getToken: () => Promise.resolve("TK"),
+      fetchFn: fetchFn as typeof fetch,
+    })
+    await api.sendC2C("O", "# 标题", { msgId: "MD1", format: "markdown" })
+    const body1 = JSON.parse(fetchFn.mock.calls[0][1].body)
+    const body2 = JSON.parse(fetchFn.mock.calls[1][1].body)
+    expect(body1.msg_type).toBe(2)
+    expect(body1.markdown.content).toBe("# 标题")
+    expect(body2.msg_type).toBe(0)
+    expect(body2.content).toBe("# 标题")
+    expect(body2.msg_seq).toBe(body1.msg_seq)
+  })
 })

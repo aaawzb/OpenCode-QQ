@@ -23,19 +23,17 @@ export class QQApi {
     return task
   }
 
-  private async doSend(openid: string, content: string, options: SendOptions): Promise<void> {
-    const body: Record<string, unknown> = { msg_type: 0, content }
-    if (options.msgId) {
-      const used = this.seqCounters.get(options.msgId) ?? 0
-      if (used >= MAX_REPLIES_PER_MSG_ID) {
-        // 被动额度用尽 → 降级主动消息
-      } else {
-        body.msg_id = options.msgId
-        body.msg_seq = used + 1
-        this.seqCounters.set(options.msgId, used + 1)
-        if (this.seqCounters.size > 500) this.pruneSeq()
-      }
-    }
+  private nextSeq(msgId?: string): number | undefined {
+    if (!msgId) return undefined
+    const used = this.seqCounters.get(msgId) ?? 0
+    if (used >= MAX_REPLIES_PER_MSG_ID) return undefined // 额度用尽 → 调用方降级主动消息
+    const seq = used + 1
+    this.seqCounters.set(msgId, seq)
+    if (this.seqCounters.size > 500) this.seqCounters.clear()
+    return seq
+  }
+
+  private async postWithRetry(openid: string, body: Record<string, unknown>): Promise<void> {
     for (let attempt = 0; attempt <= 3; attempt++) {
       const token = await this.opts.getToken()
       const res = await this.fetchFn(`${this.opts.restBase}/v2/users/${openid}/messages`, {
@@ -53,8 +51,31 @@ export class QQApi {
     }
   }
 
-  private pruneSeq(): void {
-    // 简单防膨胀：超限时全量清理（旧 msg_seq 计数丢失只影响去重，不影响功能正确性）
-    this.seqCounters.clear()
+  private async doSend(openid: string, content: string, options: SendOptions): Promise<void> {
+    const format = options.format ?? "text"
+    let msgId = options.msgId
+    let seqReserved: number | undefined
+    if (msgId) {
+      seqReserved = this.nextSeq(msgId)
+      if (seqReserved === undefined) msgId = undefined // 被动额度用尽 → 主动消息
+    }
+    const makeBody = (fmt: "text" | "markdown"): Record<string, unknown> => {
+      const body: Record<string, unknown> =
+        fmt === "markdown" ? { msg_type: 2, markdown: { content } } : { msg_type: 0, content }
+      if (msgId && seqReserved !== undefined) {
+        body.msg_id = msgId
+        body.msg_seq = seqReserved
+      }
+      return body
+    }
+    try {
+      await this.postWithRetry(openid, makeBody(format))
+    } catch (e) {
+      if (format === "markdown") {
+        await this.postWithRetry(openid, makeBody("text")) // 降级复用同一 msg_seq
+        return
+      }
+      throw e
+    }
   }
 }
