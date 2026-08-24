@@ -1,3 +1,8 @@
 node_modules/
 dist/
 *.log
+
+# opencode 本地配置不入库
+opencode.json
+opencode.jsonc
+.opencode/
