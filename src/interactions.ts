@@ -48,6 +48,6 @@ export async function handleInteraction(evt: InteractionEvt, deps: InteractionDe
       parsed.action === "approve" ? `已批准 #${parsed.seq} ✓` : `已拒绝 #${parsed.seq}`,
     )
   } catch (e) {
-    qqLog("interactions", "INT001", String(e).slice(0, 200))
+    qqLog("interactions", "INT_HANDLE_FAIL", String(e).slice(0, 200))
   }
 }

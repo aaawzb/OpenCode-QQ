@@ -11,6 +11,7 @@ import {
   REST_BASE_PROD,
   REST_BASE_SANDBOX,
   INTENT_GROUP_AND_C2C,
+  INTENT_INTERACTION,
   APPROVAL_TIMEOUT_MS,
   PASSIVE_WINDOW_MS,
   STREAM_FLUSH_INTERVAL_MS,
@@ -22,6 +23,8 @@ import { SingleInstanceLock } from "./lock.js"
 import { SessionManager, type OpencodeBridge } from "./session-manager.js"
 import { splitText } from "./util/chunk.js"
 import { guessImageMime, toImageDataUrl } from "./util/media.js"
+import { buildAckKeyboard, buildApprovalKeyboard, buildReplyKeyboard } from "./keyboard.js"
+import { handleInteraction, type InteractionDeps } from "./interactions.js"
 
 type OcEvent = { type: string; properties: Record<string, unknown> }
 
@@ -169,23 +172,38 @@ export const QQBotPlugin: Plugin = async (input) => {
     return true
   }
 
-  async function replyTo(openid: string, text: string, format: "text" | "markdown" = "text"): Promise<void> {
+  async function replyTo(
+    openid: string,
+    text: string,
+    format: "text" | "markdown" = "text",
+    keyboard?: unknown,
+    eventId?: string,
+  ): Promise<void> {
     const ref = passiveRefs.get(openid)
     const chunks = splitText(text)
     for (const chunk of chunks) {
       const usePassive = !!ref && Date.now() - ref.receivedAt < PASSIVE_WINDOW_MS
+      const opts = eventId
+        ? { eventId, format, keyboard }
+        : usePassive
+          ? { msgId: ref!.msgId, format, keyboard }
+          : { format, keyboard }
       try {
-        await api.sendC2C(openid, chunk, usePassive ? { msgId: ref!.msgId, format } : { format })
+        await api.sendC2C(openid, chunk, opts)
       } catch {
-        if (!usePassive) pendingNotice.set(openid, "（此前有未能送达的消息）")
+        if (!usePassive && !eventId) pendingNotice.set(openid, "（此前有未能送达的消息）")
       }
     }
   }
 
+  /** keyboard 开关统一入口：关闭时返回 undefined（纯文本） */
+  const kb = (k: () => unknown) => (cfg.keyboard ? k() : undefined)
+
   const gateway = new QQGateway({
     getGatewayUrl: createGatewayUrlFetcher(restBase, () => auth.getToken()),
     getToken: () => auth.getToken(),
-    intents: INTENT_GROUP_AND_C2C,
+    intents: INTENT_GROUP_AND_C2C | INTENT_INTERACTION,
+    interaction: (evt) => void handleInteraction(evt, interactionDeps),
     connected: () => pusher.setOnline(true),
     disconnected: () => pusher.setOnline(false),
     message: async (msg) => {
@@ -193,7 +211,7 @@ export const QQBotPlugin: Plugin = async (input) => {
       try {
         if (allowSet.size > 0 && !allowSet.has(msg.openid)) return
         passiveRefs.set(msg.openid, { msgId: msg.msgId, receivedAt: Date.now() })
-        await replyTo(msg.openid, "已收到，处理中…")
+        await replyTo(msg.openid, "已收到，处理中…", "text", kb(() => buildAckKeyboard(msg.openid)))
 
         // 远程审批回复优先
         const parsed = approver.parseReply(msg.content.trim())
@@ -231,7 +249,12 @@ export const QQBotPlugin: Plugin = async (input) => {
         const answer = await sessions.dispatch(msg.openid, promptText, files)
         const deliveredByStream = endStream(msg.openid, answer, stream)
         if (!deliveredByStream) {
-          await replyTo(msg.openid, (notice ? `${notice}\n` : "") + answer, cfg.markdownReply ? "markdown" : "text")
+          await replyTo(
+            msg.openid,
+            (notice ? `${notice}\n` : "") + answer,
+            cfg.markdownReply ? "markdown" : "text",
+            kb(() => buildReplyKeyboard(msg.openid)),
+          )
         }
       } catch (e) {
         if (stream && streams.get(msg.openid) === stream) streams.delete(msg.openid) // 仅清理仍归属本次的流
@@ -253,8 +276,23 @@ export const QQBotPlugin: Plugin = async (input) => {
       for (const [o, s] of Object.entries(sessions.snapshot())) if (s === sessionId) return o
       return null
     })()
-    if (openid) void replyTo(openid, approver.render(seq))
+    if (openid) {
+      void replyTo(openid, approver.render(seq), "text", kb(() => buildApprovalKeyboard(seq, openid)))
+    }
   })
+
+  // ---- 互动事件（按钮点击）→ 审批代答路由 ----
+  const interactionDeps: InteractionDeps = {
+    put: (id, code) => api.putInteraction(id, code),
+    confirm: (seq) => approver.confirm(seq),
+    respond: async (sessionId, permissionId, reply) => {
+      await input.client.postSessionIdPermissionsPermissionId({
+        path: { id: sessionId, permissionID: permissionId },
+        body: { response: reply },
+      })
+    },
+    sendViaEvent: (openid, eventId, text) => replyTo(openid, text, "text", undefined, eventId),
+  }
 
   // ---- 流式增量：assistant 文本累计 → 节流推送 stream_messages ----
   // 终审 C1：message.part.updated 的 part 是全量快照、专用增量字段是 delta
