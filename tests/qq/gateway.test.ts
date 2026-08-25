@@ -348,6 +348,40 @@ describe("QQGateway", () => {
     h.server.close()
   })
 
+  it("保留带子类型的 content_type 并放行 file 类型附件", async () => {
+    const h = await startMockGateway()
+    const gotMsg = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      connected: vi.fn(),
+      message: gotMsg,
+      disconnected: vi.fn(),
+    })
+    gw.start()
+    const client = await firstClient(h)
+    client.send(JSON.stringify({
+      op: 0, s: 10, t: "C2C_MESSAGE_CREATE",
+      id: "EVT-ATT-2",
+      d: {
+        openid: "U2", content: "", msg_id: "M3", timestamp: "2026-01-01",
+        attachments: [
+          { content_type: "image/jpeg", url: "https://multimedia.nt.qq.com.cn/download?appid=1406&rkey=x", filename: "a.jpg" },
+          { content_type: "file", url: "https://grouptalk.c2c.qq.com/download?rkey=y", filename: "doc.docx" },
+        ],
+      },
+    }))
+    await vi.waitFor(() => expect(gotMsg).toHaveBeenCalled())
+    const atts = gotMsg.mock.calls[0][0].attachments
+    expect(atts).toEqual([
+      { contentType: "image/jpeg", url: "https://multimedia.nt.qq.com.cn/download?appid=1406&rkey=x", filename: "a.jpg" },
+      { contentType: "file", url: "https://grouptalk.c2c.qq.com/download?rkey=y", filename: "doc.docx" },
+    ])
+    gw.stop()
+    h.server.close()
+  })
+
   it("op9 Invalid Session：清空会话、告警 GW004 并重连走全新 Identify", async () => {
     const h = await startMultiConnGateway({
       onResume: (client) => client.send(JSON.stringify({ op: 9, d: false })),
@@ -574,5 +608,47 @@ describe("QQGateway", () => {
     expect(sentOps[1]).not.toContain(6)
     gw.stop()
     server.close()
+  })
+
+  it("INTERACTION_CREATE 路由到 interaction 回调", async () => {
+    const h = await startMockGateway()
+    const got = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      connected: vi.fn(),
+      disconnected: vi.fn(),
+      message: vi.fn(),
+      interaction: got,
+    })
+    gw.start()
+    const client = await firstClient(h)
+    client.send(
+      JSON.stringify({
+        op: 0,
+        s: 7,
+        t: "INTERACTION_CREATE",
+        id: "INT-EVT-1",
+        d: {
+          id: "IID-1",
+          type: 11,
+          scene: "c2c",
+          user_openid: "U9",
+          data: { type: 11, resolved: { button_data: "approve:3", button_id: "b1" } },
+        },
+      }),
+    )
+    await vi.waitFor(() => expect(got).toHaveBeenCalled())
+    expect(got.mock.calls[0][0]).toEqual({
+      id: "IID-1",
+      type: 11,
+      buttonData: "approve:3",
+      buttonId: "b1",
+      featureId: "",
+      userOpenid: "U9",
+    })
+    gw.stop()
+    h.server.close()
   })
 })

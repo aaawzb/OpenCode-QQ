@@ -48,4 +48,9 @@ describe("loadConfig", () => {
     expect(cfg.markdownReply).toBe(true)
     expect(cfg.streaming).toBe(true)
   })
+  it("keyboard 默认 true，可显式关闭", async () => {
+    process.env.QQ_BOT_APPID = "a"
+    process.env.QQ_BOT_APPSECRET = "b"
+    expect(loadConfig("/nonexistent")!.keyboard).toBe(true)
+  })
 })

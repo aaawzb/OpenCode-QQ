@@ -6,3 +6,6 @@ dist/
 opencode.json
 opencode.jsonc
 .opencode/
+
+# QQ 收发的文件缓存（可能包含用户文档）
+.qq-files/

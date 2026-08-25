@@ -263,6 +263,21 @@ export class QQGateway {
       this.opts.connected()
       return
     }
+    if (t === "INTERACTION_CREATE" && this.opts.interaction) {
+      const data = (d.data ?? {}) as {
+        type?: number
+        resolved?: { button_data?: unknown; button_id?: unknown; feature_id?: unknown }
+      }
+      this.opts.interaction({
+        id: String(d.id ?? ""),
+        type: Number(data.type ?? d.type ?? 0),
+        buttonData: String(data.resolved?.button_data ?? ""),
+        buttonId: String(data.resolved?.button_id ?? ""),
+        featureId: String(data.resolved?.feature_id ?? ""),
+        userOpenid: String(d.user_openid ?? ""),
+      })
+      return
+    }
     if (t === "C2C_MESSAGE_CREATE") {
       const rawAttachments = Array.isArray(d.attachments) ? d.attachments : []
       this.opts.message({
@@ -273,9 +288,9 @@ export class QQGateway {
         timestamp: Date.parse(String(d.timestamp ?? "")) || Date.now(),
         attachments: rawAttachments
           .filter((a): a is Record<string, unknown> => !!a && typeof a === "object")
-          .filter((a) => String(a.content_type ?? a.contentType ?? "") === "image" || String(a.url ?? "").match(/\.(png|jpe?g|gif|webp)/i))
+          // 实测 content_type 带子类型（"image/jpeg"）或为 "file"；保留原值由上层路由
           .map((a) => ({
-            contentType: "image",
+            contentType: String(a.content_type ?? a.contentType ?? "file"),
             url: String(a.url ?? ""),
             filename: a.filename === undefined ? undefined : String(a.filename),
           }))

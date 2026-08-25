@@ -52,6 +52,13 @@ export const E = {
   STREAM_PREFIX: def("STREAM002", "流式前缀不一致（err_code=40007），回落普通回复", undefined, "warn"),
   STREAM_RATE: def("STREAM003", "流式限频（err_code=50002），退避后重试一次", undefined, "warn"),
   STREAM_SERVER: def("STREAM004", "流式服务端内部错误（err_code=50001），回落普通回复", undefined, "warn"),
+
+  /** ---- 互动 ---- */
+  KB_BUILD_FAIL: def("KB001", "keyboard 构造失败，已降级纯文本", undefined, "warn"),
+  KB_PUT_FAIL: def("KB002", "互动应答 PUT 失败", "检查 interaction_id 有效性与 3 秒窗口", "warn"),
+  KB_UNKNOWN: def("KB003", "未知按钮指令（button_data 无法解析）", undefined, "warn"),
+  INT_HANDLE_FAIL: def("INT001", "INTERACTION_CREATE 处理异常", undefined, "error"),
+  MENU_SET_FAIL: def("MENU001", "自定义菜单同步失败", "接口限 5 QPM；插件启动时会自动重试一次", "warn"),
 } satisfies Record<string, ErrSpec>
 
 export type ErrKey = keyof typeof E
