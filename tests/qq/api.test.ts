@@ -270,3 +270,55 @@ describe("QQApi 额度用尽日志", () => {
     expect(line).toContain("MSGX")
   })
 })
+
+describe("QQApi 富媒体上传与发送", () => {
+  function make(parts: Array<{ index: number; presigned_url: string; block_size: string }>) {
+    const calls: Array<{ url: string; init: RequestInit }> = []
+    const fetchFn = vi.fn().mockImplementation(async (url: string | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} })
+      const u = String(url)
+      if (u.includes("upload_prepare"))
+        return new Response(JSON.stringify({ upload_id: "UP1", block_size: "4", parts, upload_config: { concurrency: 1 } }), { status: 200 })
+      if (u.includes("upload_part_finish")) return new Response("{}", { status: 200 })
+      if (u.endsWith("/files")) return new Response(JSON.stringify({ file_info: "FILEINFO" }), { status: 200 })
+      return new Response("{}", { status: 200 })
+    })
+    const api = new QQApi({
+      restBase: "https://api.bot.qq.com",
+      getToken: () => Promise.resolve("TK"),
+      fetchFn: fetchFn as typeof fetch,
+    })
+    return { api, calls }
+  }
+  const fileBuf = Buffer.from("hello-media")
+
+  it("分片上传四步流 → file_info", async () => {
+    const { api, calls } = make([{ index: 0, presigned_url: "https://cos/p0", block_size: "4" }])
+    const fileInfo = await api.uploadFileC2C("U1", {
+      data: fileBuf,
+      filename: "a.bin",
+      fileType: 4,
+    })
+    expect(fileInfo).toBe("FILEINFO")
+    expect(calls[0].url).toContain("/v2/users/U1/upload_prepare")
+    const prep = JSON.parse(String(calls[0].init.body))
+    expect(prep).toMatchObject({ file_type: 4, file_name: "a.bin", file_size: "11" })
+    expect(prep.md5).toBeTruthy()
+    expect(prep.sha1).toBeTruthy()
+    expect(prep.md5_10m).toBeTruthy()
+    expect(calls[1].url).toBe("https://cos/p0")
+    expect(calls[1].init.method).toBe("PUT")
+    expect(calls[2].url).toContain("/upload_part_finish")
+    expect(calls[3].url).toContain("/v2/users/U1/files")
+    expect(JSON.parse(String(calls[3].init.body))).toEqual({ upload_id: "UP1" })
+  })
+
+  it("sendMedia msg_type=7 携带 file_info 与被动 msg_id", async () => {
+    const { api, calls } = make([])
+    await api.sendMedia("U1", "FILEINFO", { msgId: "M1" })
+    const body = JSON.parse(String(calls[0].init.body))
+    expect(body.msg_type).toBe(7)
+    expect(body.media).toEqual({ file_info: "FILEINFO" })
+    expect(body.msg_id).toBe("M1")
+  })
+})
