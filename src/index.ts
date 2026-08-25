@@ -45,18 +45,36 @@ export const QQBotPlugin: Plugin = async (input) => {
 
   // 桌面版会为每个项目实例各加载一次插件；用单实例锁保证只有一个网关在收发，
   // 否则同一条 QQ 消息会被处理 N 次、用户收到 N 条重复回复。
+  // 待命实例每 30 秒重试抢锁：持有者崩溃（锁 45 秒无心跳即过期）后自动接管。
   const instanceLock = new SingleInstanceLock(`${SESSIONS_PATH()}.lock`)
+  let gatewayActive = false
+  const lockRetry: ReturnType<typeof setInterval> | null = setInterval(() => {
+    if (gatewayActive) return
+    if (instanceLock.acquire()) {
+      gatewayActive = true
+      if (lockRetry) clearInterval(lockRetry)
+      gateway.start()
+      void input.client.app
+        .log({
+          body: { service: "opencode-qq", level: "info", message: "已获得单实例锁，QQ 网关启动" },
+        })
+        .catch(() => {})
+    }
+  }, 30_000)
+  lockRetry.unref?.()
   if (!instanceLock.acquire()) {
     await input.client.app
       .log({
         body: {
           service: "opencode-qq",
           level: "info",
-          message: "检测到其他 opencode 实例已启用 QQ 网关，本实例待命",
+          message: "检测到其他 opencode 实例已启用 QQ 网关，本实例待命（每 30 秒重试接管）",
         },
       })
       .catch(() => {})
-    return {}
+  } else {
+    gatewayActive = true
+    if (lockRetry) clearInterval(lockRetry)
   }
 
   const allowSet = new Set(cfg.allowlist)
@@ -326,7 +344,8 @@ export const QQBotPlugin: Plugin = async (input) => {
     }
   }, STREAM_FLUSH_INTERVAL_MS)
 
-  gateway.start()
+  // 网关启动由单实例锁仲裁：抢到锁立即启动，否则由 lockRetry 稍后接管时启动
+  if (gatewayActive) gateway.start()
 
   return {
     event: async ({ event }) => {
@@ -338,11 +357,12 @@ export const QQBotPlugin: Plugin = async (input) => {
       for (const h of listeners) h(e)
     }),
     dispose: async () => {
+      if (lockRetry) clearInterval(lockRetry)
       clearInterval(flushTimer)
       assistantBuf.clearAll()
       gateway.stop()
       pusher.dispose()
-      instanceLock.release()
+      if (gatewayActive) instanceLock.release()
     },
   }
 }
