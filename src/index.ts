@@ -118,13 +118,14 @@ export const QQBotPlugin: Plugin = async (input) => {
     pathname: string,
     opts: { directory?: string; body?: unknown } = {},
   ): Promise<T> {
+    // 注意：目录只通过 query 传递（encodeURIComponent 处理中文路径）。
+    // 不能放进 x-opencode-directory 请求头——HTTP 头仅允许单字节字符，中文路径会抛 TypeError
     const qs = opts.directory ? `?directory=${encodeURIComponent(opts.directory)}` : ""
     const res = await fetch(`${serverBase}${pathname}${qs}`, {
       method,
       headers: {
         "Content-Type": "application/json",
         Authorization: serverAuthHeader,
-        ...(opts.directory ? { "x-opencode-directory": opts.directory } : {}),
       },
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
       signal: AbortSignal.timeout(600_000), // AI 生成可能很久
