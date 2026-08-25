@@ -278,7 +278,7 @@ export const QQBotPlugin: Plugin = async (input) => {
               savedFiles.push(saved)
             }
           } catch (e) {
-            await replyTo(msg.openid, `⚠️ 附件下载失败（${att.filename ?? att.contentType}）：${String(e).slice(0, 80)}，仅处理文字部分`).catch(() => {})
+            await replyTo(msg.openid, `附件下载失败（${att.filename ?? att.contentType}）：${String(e).slice(0, 80)}，仅处理文字部分`).catch(() => {})
           }
         }
         const mediaNote = [

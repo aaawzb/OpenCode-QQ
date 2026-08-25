@@ -46,14 +46,14 @@ export function buildApprovalKeyboard(seq: number, openid: string): QQKeyboard {
 
 /** ack 回执键盘：中断当前任务（指令流） */
 export function buildAckKeyboard(openid: string): QQKeyboard {
-  return keyboard(button("ack-interrupt", "⏹ 中断", "/interrupt", 2, openid, true))
+  return keyboard(button("ack-interrupt", "中断", "/interrupt", 2, openid, true))
 }
 
 /** AI 回复键盘：新会话 / 状态（指令流） */
 export function buildReplyKeyboard(openid: string): QQKeyboard {
   return keyboard(
-    button("reply-new", "➕ 新会话", "/new", 2, openid, true),
-    button("reply-status", "📊 状态", "/status", 2, openid, true),
+    button("reply-new", "新会话", "/new", 2, openid, true),
+    button("reply-status", "状态", "/status", 2, openid, true),
   )
 }
 

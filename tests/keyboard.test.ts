@@ -19,13 +19,13 @@ describe("keyboard 构造器", () => {
   it("ack 键盘：单【中断】指令按钮", () => {
     const kb = buildAckKeyboard("USER_OPENID")
     const b = kb.content.rows[0].buttons[0]
-    expect(b.render_data.label).toBe("⏹ 中断")
+    expect(b.render_data.label).toBe("中断")
     expect(b.action).toMatchObject({ type: 2, enter: true, data: "/interrupt" })
   })
   it("回复键盘：【新会话】【状态】指令按钮", () => {
     const kb = buildReplyKeyboard("USER_OPENID")
     const labels = kb.content.rows[0].buttons.map((b) => b.render_data.label)
-    expect(labels).toEqual(["➕ 新会话", "📊 状态"])
+    expect(labels).toEqual(["新会话", "状态"])
     expect(kb.content.rows[0].buttons[0].action.data).toBe("/new")
     expect(kb.content.rows[0].buttons[1].action.data).toBe("/status")
   })

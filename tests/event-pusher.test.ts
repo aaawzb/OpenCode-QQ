@@ -26,7 +26,7 @@ describe("EventPusher", () => {
     const { emit, sent } = makeDeps()
     emit("session.idle", { sessionID: "ours1" })
     await vi.waitFor(() => expect(sent).toHaveLength(1))
-    expect(sent[0].text).toContain("✅")
+    expect(sent[0].text).toContain("任务完成")
     expect(sent[0].openid).toBe("u-1")
   })
 
@@ -34,7 +34,7 @@ describe("EventPusher", () => {
     const { emit, sent } = makeDeps()
     emit("session.error", { sessionID: "ours2", error: "boom" })
     await vi.waitFor(() => expect(sent).toHaveLength(1))
-    expect(sent[0].text).toContain("❌")
+    expect(sent[0].text).toContain("出错")
     expect(sent[0].text).toContain("boom")
   })
 
@@ -83,7 +83,7 @@ describe("EventPusher", () => {
       error: { name: "UnknownError", data: { message: "x".repeat(500) } },
     })
     await vi.waitFor(() => expect(sent).toHaveLength(1))
-    const body = sent[0].text.split("❌ 出错: ")[1]
+    const body = sent[0].text.split("出错: ")[1]
     expect(body).toHaveLength(300)
   })
 
@@ -103,7 +103,7 @@ describe("EventPusher", () => {
     })
     handler({ type: "session.idle", properties: { sessionID: "ours7" } })
     await vi.waitFor(() => expect(sent).toHaveLength(1))
-    expect(sent[0].text).toContain("✅ 任务完成。")
+    expect(sent[0].text).toContain("任务完成。")
     expect(sent[0].text).toContain("\n摘要: ")
     const summary = sent[0].text.split("\n摘要: ")[1]
     // 尾部 200 字符："A".repeat(197) + "END"，更早的 103 个 A 被截掉
@@ -125,6 +125,6 @@ describe("EventPusher", () => {
     })
     handler({ type: "session.idle", properties: { sessionID: "ours8" } })
     await vi.waitFor(() => expect(sent).toHaveLength(1))
-    expect(sent[0].text).toBe("✅ 任务完成。")
+    expect(sent[0].text).toBe("任务完成。")
   })
 })

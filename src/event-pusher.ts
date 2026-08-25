@@ -42,7 +42,7 @@ export class EventPusher {
     this.throttler = new Throttler(deps.toolProgressIntervalMs ?? TOOL_PROGRESS_INTERVAL_MS, (key, lines) => {
       const openid = key
       void this.deps
-        .send(openid, `🛠 工具进度:\n${lines.map((l) => `- ${l}`).join("\n")}`)
+        .send(openid, `工具进度:\n${lines.map((l) => `- ${l}`).join("\n")}`)
         .catch(() => {})
     })
     deps.subscribe((evt) => this.handle(evt))
@@ -75,12 +75,12 @@ export class EventPusher {
     switch (evt.type) {
       case "session.idle": {
         const tail = this.deps.lastAssistantText?.(sessionId)
-        this.deliver(openid, tail ? `✅ 任务完成。\n摘要: ${tail.slice(-200)}` : "✅ 任务完成。")
+        this.deliver(openid, tail ? `任务完成。\n摘要: ${tail.slice(-200)}` : "任务完成。")
         break
       }
       case "session.error": {
         const err = summarizeError(props.error)
-        this.deliver(openid, `❌ 出错: ${err}`)
+        this.deliver(openid, `出错: ${err}`)
         break
       }
       case "tool.execute.after":
