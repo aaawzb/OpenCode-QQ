@@ -2,7 +2,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { describe, expect, it, vi } from "vitest"
-import { listModelPresets, listWorkdirs, readOpencodeConfig } from "../src/presets"
+import { listModelPresets, listModelPresetsWithBuiltin, listWorkdirs, readOpencodeConfig } from "../src/presets"
 
 function writeConfig(content: string): string {
   const dir = fs.mkdtempSync(`${os.tmpdir()}/qqpreset-`)
@@ -63,5 +63,21 @@ describe("listWorkdirs", () => {
     )
     const dirs = await listWorkdirs("http://x", "auth", fetchFn as typeof fetch)
     expect(dirs).toEqual(["D:\\A", "D:\\B"])
+  })
+})
+
+describe("listModelPresetsWithBuiltin", () => {
+  it("配置为空时仍有内置免费模型", () => {
+    expect(listModelPresetsWithBuiltin({})).toEqual([
+      { id: "opencode/x-preview-f-free", label: "OpenCode 免费模型", thinking: false },
+    ])
+  })
+  it("扫描结果在前，内置追加在末尾", () => {
+    const cfg = { provider: { p: { models: { "x-preview-f-free": { name: "免费" } } } } }
+    const presets = listModelPresetsWithBuiltin(cfg)
+    expect(presets).toEqual([
+      { id: "p/x-preview-f-free", label: "免费", thinking: false },
+      { id: "opencode/x-preview-f-free", label: "OpenCode 免费模型", thinking: false },
+    ])
   })
 })

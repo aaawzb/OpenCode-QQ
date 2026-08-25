@@ -24,6 +24,8 @@ export interface InteractionDeps {
   resolveAction?(featureId: string): string | undefined
   /** 可选：以指令文本驱动会话动作（菜单动作的执行通道） */
   runCommand?(openid: string, commandText: string): Promise<string>
+  /** 可选：诊断日志（写入 opencode 实例日志，便于排查按钮问题） */
+  log?(level: "info" | "warn" | "error", message: string): void
 }
 
 /**
@@ -32,7 +34,10 @@ export interface InteractionDeps {
  * 业务结果通过 event_id 被动消息反馈给用户。
  */
 export async function handleInteraction(evt: InteractionEvt, deps: InteractionDeps): Promise<void> {
+  const log = (level: "info" | "warn" | "error", message: string) =>
+    tryLog(deps.log, level, `interaction type=${evt.type} id=${evt.id.slice(0, 8)} :: ${message}`)
   try {
+    log("info", `收到互动事件, buttonData=${evt.buttonData || "(空)"}, featureId=${evt.featureId || "(空)"}`)
     await deps.put(evt.id, 0)
     if (evt.type === 12) {
       // 快捷菜单：featureId → 配置映射的动作串 → 指令通道执行
@@ -66,5 +71,18 @@ export async function handleInteraction(evt: InteractionEvt, deps: InteractionDe
     )
   } catch (e) {
     qqLog("interactions", "INT_HANDLE_FAIL", String(e).slice(0, 200))
+    tryLog(deps.log, "error", `处理异常: ${String(e).slice(0, 200)}`)
+  }
+}
+
+function tryLog(
+  log: ((level: "info" | "warn" | "error", message: string) => void) | undefined,
+  level: "info" | "warn" | "error",
+  message: string,
+): void {
+  try {
+    log?.(level, message)
+  } catch {
+    /* 日志失败不影响主流程 */
   }
 }

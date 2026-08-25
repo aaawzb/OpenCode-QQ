@@ -15,8 +15,8 @@ export interface OpencodeBridge {
   resolveModel(): Promise<{ providerID: string; modelID: string }>
   /** 可选：会话被 /new 重置时通知（index.ts 用它清空待审请求） */
   onSessionReset?(sessionId: string): void
-  /** 可选：中断会话当前任务（/interrupt 指令） */
-  sessionInterrupt?(sessionId: string): Promise<void>
+  /** 可选：中断会话当前任务（/interrupt 指令）；directory 须回传保证在正确项目上下文中执行 */
+  sessionInterrupt?(sessionId: string, directory?: string): Promise<void>
   /** 可选：列出某工作区下的会话（/session 指令） */
   sessionList?(directory?: string): Promise<Array<{ id: string; title: string }>>
 }
@@ -40,6 +40,8 @@ export class SessionManager {
   /** 每用户最近一条非指令消息（/retry 用），随实例生命周期 */
   private lastUserText = new Map<string, string>()
   private userModel = new Map<string, UserModelChoice>()
+  /** sessionId -> 创建/绑定时的目录（prompt/interrupt 必须带回，否则服务器在默认目录上下文执行导致模型解析错位） */
+  private sessionDirectory = new Map<string, string>()
   private userWorkdir = new Map<string, string>()
 
   constructor(
@@ -98,7 +100,7 @@ export class SessionManager {
         case "interrupt": {
           const sid = await this.getSessionId(openid)
           if (!sid) return "暂无进行中的会话。"
-          await this.bridge.sessionInterrupt?.(sid)
+          await this.bridge.sessionInterrupt?.(sid, this.sessionDirectory.get(sid))
           return "已中断当前任务。"
         }
         case "continue": {
@@ -142,9 +144,11 @@ export class SessionManager {
     let sessionId = await this.getSessionId(openid)
     if (!sessionId) {
       const title = text.slice(0, 20)
-      const created = await this.bridge.sessionCreate(title, this.userWorkdir.get(openid))
+      const directory = this.userWorkdir.get(openid)
+      const created = await this.bridge.sessionCreate(title, directory)
       sessionId = created.id
       this.map.set(openid, sessionId)
+      if (directory) this.sessionDirectory.set(sessionId, directory)
       this.persist()
       await this.bridge.sessionPrompt(sessionId, "以下用户将通过 QQ 单聊与你对话，回答请精炼。", true)
     }
@@ -158,7 +162,7 @@ export class SessionManager {
     files: Array<{ mime: string; dataUrl: string }>,
   ): Promise<string> {
     const model = this.userModel.get(openid)
-    const directory = this.userWorkdir.get(openid)
+    const directory = this.sessionDirectory.get(sessionId) ?? this.userWorkdir.get(openid)
     const result = await this.bridge.sessionPrompt(sessionId, text, false, files, {
       ...(model ? { model: { providerID: model.providerID, modelID: model.modelID } } : {}),
       ...(directory ? { directory } : {}),
@@ -246,6 +250,7 @@ export class SessionManager {
     const pick = sessions[idx]
     if (!pick) return `序号超出范围（1-${sessions.length}）。`
     this.map.set(openid, pick.id)
+    if (directory) this.sessionDirectory.set(pick.id, directory)
     this.persist()
     return `已切换会话: ${pick.title || pick.id}`
   }

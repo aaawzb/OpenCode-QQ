@@ -22,7 +22,7 @@ import { toolExecuteAfterHook } from "./relay.js"
 import { AssistantTextBuffer } from "./stream-buffer.js"
 import { SingleInstanceLock } from "./lock.js"
 import { SessionManager, type OpencodeBridge, type SessionOps } from "./session-manager.js"
-import { listModelPresets, listWorkdirs, readOpencodeConfig } from "./presets.js"
+import { listModelPresetsWithBuiltin, listWorkdirs, readOpencodeConfig } from "./presets.js"
 import { splitText } from "./util/chunk.js"
 import { saveAttachment, toImageDataUrl } from "./util/media.js"
 import { buildAckKeyboard, buildApprovalKeyboard, buildReplyKeyboard } from "./keyboard.js"
@@ -131,8 +131,11 @@ export const QQBotPlugin: Plugin = async (input) => {
       if (!cachedModel) await bridge.sessionPrompt("__warm__", "", true).catch(() => {})
       return cachedModel ?? { providerID: "unknown", modelID: "unknown" }
     },
-    async sessionInterrupt(sessionId) {
-      await input.client.session.abort({ path: { id: sessionId } })
+    async sessionInterrupt(sessionId, directory) {
+      await input.client.session.abort({
+        path: { id: sessionId },
+        query: directory ? { directory } : undefined,
+      })
     },
     async sessionList(directory) {
       const res = await input.client.session.list({ query: directory ? { directory } : undefined })
@@ -144,7 +147,7 @@ export const QQBotPlugin: Plugin = async (input) => {
   // ---- 模型/工作区/会话查询能力（/model /workdir /session 指令用）----
   const serverAuth = `opencode:${process.env.OPENCODE_SERVER_PASSWORD ?? ""}`
   const ops: SessionOps = {
-    listModels: () => listModelPresets(readOpencodeConfig()),
+    listModels: () => listModelPresetsWithBuiltin(readOpencodeConfig()),
     defaultModel: () => {
       if (cachedModel) return cachedModel
       if (cfg.model) {
@@ -378,6 +381,9 @@ export const QQBotPlugin: Plugin = async (input) => {
       const reply = await sessions.dispatch(openid, commandText)
       await replyTo(openid, reply, "text", kb(() => buildReplyKeyboard(openid)))
       return reply
+    },
+    log: (level, message) => {
+      void input.client.app.log({ body: { service: "opencode-qq", level, message } }).catch(() => {})
     },
   }
 

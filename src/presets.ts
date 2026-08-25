@@ -53,6 +53,22 @@ export function listModelPresets(cfg: Record<string, unknown>): ModelPreset[] {
   return out
 }
 
+const BUILTIN_FREE: ModelPreset = {
+  id: "opencode/x-preview-f-free",
+  label: "OpenCode 免费模型",
+  thinking: false,
+}
+
+/**
+ * 扫描结果 + 内置免费模型（内置模型不存在于配置文件，纯扫描会漏掉）。
+ * 内置项追加在末尾；若扫描结果已含同 id 则不重复。
+ */
+export function listModelPresetsWithBuiltin(cfg: Record<string, unknown>): ModelPreset[] {
+  const scanned = listModelPresets(cfg)
+  if (scanned.some((p) => p.id === BUILTIN_FREE.id)) return scanned
+  return [...scanned, BUILTIN_FREE]
+}
+
 /** 查询服务器会话记录，按 directory 去重生成工作区候选 */
 export async function listWorkdirs(
   serverUrl: string,
