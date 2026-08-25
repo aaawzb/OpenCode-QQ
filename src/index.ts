@@ -88,7 +88,12 @@ export const QQBotPlugin: Plugin = async (input) => {
   let cachedModel: { providerID: string; modelID: string } | null = null
   const bridge: OpencodeBridge = {
     async sessionCreate(title) {
-      const res = await input.client.session.create({ body: { title } })
+      // 显式绑定到插件实例所在项目目录：否则会话落到 sidecar 默认目录，
+      // 桌面端切换项目后看不到（Bug：QQ 创建的会话无法在 opencode 中查看）
+      const res = await input.client.session.create({
+        body: { title },
+        query: { directory: input.directory },
+      })
       return { id: res.data!.id }
     },
     async sessionPrompt(id, text, noReply, files) {

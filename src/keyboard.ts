@@ -4,7 +4,6 @@ export interface QQButton {
   action: {
     type: number
     permission: { type: number; specify_role_ids: string[]; specify_user_ids: string[] }
-    click_limit: number
     data: string
     enter?: boolean
   }
