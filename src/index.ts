@@ -25,8 +25,14 @@ import { SessionManager, type OpencodeBridge, type SessionOps } from "./session-
 import { listModelPresetsWithBuiltin, listWorkdirs, readOpencodeConfig } from "./presets.js"
 import { splitText } from "./util/chunk.js"
 import { saveAttachment, toImageDataUrl } from "./util/media.js"
-import { buildAckKeyboard, buildApprovalKeyboard, buildReplyKeyboard } from "./keyboard.js"
+import {
+  buildAckKeyboard,
+  buildApprovalKeyboard,
+  buildDefaultMenuPanel,
+  buildReplyKeyboard,
+} from "./keyboard.js"
 import { handleInteraction, type InteractionDeps } from "./interactions.js"
+import { qqLog } from "./errors.js"
 
 type OcEvent = { type: string; properties: Record<string, unknown> }
 
@@ -50,12 +56,27 @@ export const QQBotPlugin: Plugin = async (input) => {
   // 待命实例每 30 秒重试抢锁：持有者崩溃（锁 45 秒无心跳即过期）后自动接管。
   const instanceLock = new SingleInstanceLock(`${SESSIONS_PATH()}.lock`)
   let gatewayActive = false
+  let menuSynced = false
+  const syncMenu = async (): Promise<void> => {
+    if (menuSynced || !cfg.keyboard) return
+    menuSynced = true
+    try {
+      await api.setMenu(buildDefaultMenuPanel())
+      await input.client.app
+        .log({ body: { service: "opencode-qq", level: "info", message: "自定义菜单已同步" } })
+        .catch(() => {})
+    } catch (e) {
+      menuSynced = false // 允许下次锁接管时重试
+      qqLog("menu", "MENU_SET_FAIL", String(e).slice(0, 150))
+    }
+  }
   const lockRetry: ReturnType<typeof setInterval> | null = setInterval(() => {
     if (gatewayActive) return
     if (instanceLock.acquire()) {
       gatewayActive = true
       if (lockRetry) clearInterval(lockRetry)
       gateway.start()
+      void syncMenu()
       void input.client.app
         .log({
           body: { service: "opencode-qq", level: "info", message: "已获得单实例锁，QQ 网关启动" },
@@ -77,6 +98,7 @@ export const QQBotPlugin: Plugin = async (input) => {
   } else {
     gatewayActive = true
     if (lockRetry) clearInterval(lockRetry)
+    void syncMenu()
   }
 
   const allowSet = new Set(cfg.allowlist)

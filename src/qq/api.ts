@@ -199,6 +199,7 @@ export class QQApi {
   async getMenu(): Promise<unknown> {
     const token = await this.opts.getToken()
     const res = await this.fetchFn(`${this.opts.restBase}/v2/menu`, {
+      method: "GET",
       headers: { Authorization: `QQBot ${token}` },
       signal: AbortSignal.timeout(10_000),
     })
