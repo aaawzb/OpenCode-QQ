@@ -17,6 +17,8 @@ export interface OpencodeBridge {
   onSessionReset?(sessionId: string): void
   /** 可选：中断会话当前任务（/interrupt 指令） */
   sessionInterrupt?(sessionId: string): Promise<void>
+  /** 可选：列出某工作区下的会话（/session 指令） */
+  sessionList?(directory?: string): Promise<Array<{ id: string; title: string }>>
 }
 
 /** 模型/工作区/会话列表的查询能力（presets.ts 与服务器 API 的适配层） */

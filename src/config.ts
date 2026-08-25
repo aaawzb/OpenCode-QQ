@@ -17,6 +17,8 @@ export interface QQConfig {
   streaming: boolean
   /** 是否启用消息按钮互动（keyboard），默认 true */
   keyboard: boolean
+  /** 管理端快捷菜单 featureId → 动作串映射（动作如 model:2 / thinking:high / workdir:1 / new） */
+  menus?: Array<{ featureId: string; action: string }>
 }
 
 export function loadConfig(path = CONFIG_PATH()): QQConfig | null {
@@ -41,5 +43,8 @@ export function loadConfig(path = CONFIG_PATH()): QQConfig | null {
     markdownReply: file.markdownReply ?? true,
     streaming: file.streaming ?? true,
     keyboard: file.keyboard ?? true,
+    menus: Array.isArray(file.menus)
+      ? (file.menus as Array<{ featureId: string; action: string }>)
+      : undefined,
   }
 }

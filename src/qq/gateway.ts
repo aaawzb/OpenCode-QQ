@@ -266,13 +266,14 @@ export class QQGateway {
     if (t === "INTERACTION_CREATE" && this.opts.interaction) {
       const data = (d.data ?? {}) as {
         type?: number
-        resolved?: { button_data?: unknown; button_id?: unknown }
+        resolved?: { button_data?: unknown; button_id?: unknown; feature_id?: unknown }
       }
       this.opts.interaction({
         id: String(d.id ?? ""),
         type: Number(data.type ?? d.type ?? 0),
         buttonData: String(data.resolved?.button_data ?? ""),
         buttonId: String(data.resolved?.button_id ?? ""),
+        featureId: String(data.resolved?.feature_id ?? ""),
         userOpenid: String(d.user_openid ?? ""),
       })
       return

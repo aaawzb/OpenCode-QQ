@@ -21,7 +21,8 @@ import { EventPusher } from "./event-pusher.js"
 import { toolExecuteAfterHook } from "./relay.js"
 import { AssistantTextBuffer } from "./stream-buffer.js"
 import { SingleInstanceLock } from "./lock.js"
-import { SessionManager, type OpencodeBridge } from "./session-manager.js"
+import { SessionManager, type OpencodeBridge, type SessionOps } from "./session-manager.js"
+import { listModelPresets, listWorkdirs, readOpencodeConfig } from "./presets.js"
 import { splitText } from "./util/chunk.js"
 import { saveAttachment, toImageDataUrl } from "./util/media.js"
 import { buildAckKeyboard, buildApprovalKeyboard, buildReplyKeyboard } from "./keyboard.js"
@@ -88,38 +89,41 @@ export const QQBotPlugin: Plugin = async (input) => {
   // ---- opencode 桥接 ----
   let cachedModel: { providerID: string; modelID: string } | null = null
   const bridge: OpencodeBridge = {
-    async sessionCreate(title) {
-      // 显式绑定到插件实例所在项目目录：否则会话落到 sidecar 默认目录，
-      // 桌面端切换项目后看不到（Bug：QQ 创建的会话无法在 opencode 中查看）
+    async sessionCreate(title, directory) {
+      // 显式绑定目录：否则会话落到 sidecar 默认目录，桌面端切换项目后看不到
       const res = await input.client.session.create({
         body: { title },
-        query: { directory: input.directory },
+        query: { directory: directory ?? input.directory },
       })
       return { id: res.data!.id }
     },
-    async sessionPrompt(id, text, noReply, files) {
-      if (!cachedModel) {
+    async sessionPrompt(id, text, noReply, files, opts) {
+      let model = opts?.model ?? cachedModel
+      if (!model) {
         if (cfg.model) {
           const [providerID, modelID] = cfg.model.split("/")
-          cachedModel = { providerID, modelID }
+          model = { providerID, modelID }
         } else {
           const conf = await input.client.config.get()
           const m = (conf.data as { model?: string } | undefined)?.model
           if (!m) throw new Error("未配置 model，请在 opencode-qq.json 中设置 model: 'providerID/modelID'")
           const [providerID, modelID] = m.split("/")
-          cachedModel = { providerID, modelID }
+          model = { providerID, modelID }
         }
+        cachedModel = model
       }
+      const directory = opts?.directory
       const res = await input.client.session.prompt({
         path: { id },
         body: {
-          model: cachedModel,
+          model,
           noReply,
           parts: [
             { type: "text", text },
             ...(files ?? []).map((f) => ({ type: "file" as const, mime: f.mime, url: f.dataUrl })),
           ],
         },
+        query: directory ? { directory } : undefined,
       })
       return { parts: (res.data as { parts?: Array<{ type: string; text?: string }> } | undefined)?.parts ?? [] }
     },
@@ -127,6 +131,30 @@ export const QQBotPlugin: Plugin = async (input) => {
       if (!cachedModel) await bridge.sessionPrompt("__warm__", "", true).catch(() => {})
       return cachedModel ?? { providerID: "unknown", modelID: "unknown" }
     },
+    async sessionInterrupt(sessionId) {
+      await input.client.session.abort({ path: { id: sessionId } })
+    },
+    async sessionList(directory) {
+      const res = await input.client.session.list({ query: directory ? { directory } : undefined })
+      const arr = (res.data ?? []) as Array<{ id: string; title?: string }>
+      return arr.map((s) => ({ id: s.id, title: s.title ?? "" }))
+    },
+  }
+
+  // ---- 模型/工作区/会话查询能力（/model /workdir /session 指令用）----
+  const serverAuth = `opencode:${process.env.OPENCODE_SERVER_PASSWORD ?? ""}`
+  const ops: SessionOps = {
+    listModels: () => listModelPresets(readOpencodeConfig()),
+    defaultModel: () => {
+      if (cachedModel) return cachedModel
+      if (cfg.model) {
+        const [providerID, modelID] = cfg.model.split("/")
+        return { providerID, modelID }
+      }
+      return { providerID: "opencode", modelID: "x-preview-f-free" }
+    },
+    listWorkdirs: () => listWorkdirs(input.serverUrl.toString().replace(/\/$/, ""), serverAuth),
+    listSessions: (directory) => bridge.sessionList?.(directory) ?? Promise.resolve([]),
   }
 
   const sessions = new SessionManager(
@@ -134,6 +162,7 @@ export const QQBotPlugin: Plugin = async (input) => {
     SESSIONS_PATH(),
     fs,
     (sid) => approver.countBySession(sid), // 终审 I4a：/status 附带待审批数
+    ops,
   )
   // /new 重置会话时清空该会话的待审请求（规格第 5 节）
   bridge.onSessionReset = (sid) => approver.clearSession(sid)
@@ -344,6 +373,12 @@ export const QQBotPlugin: Plugin = async (input) => {
       })
     },
     sendViaEvent: (openid, eventId, text) => replyTo(openid, text, "text", undefined, eventId),
+    resolveAction: (featureId) => cfg.menus?.find((m) => m.featureId === featureId)?.action,
+    runCommand: async (openid, commandText) => {
+      const reply = await sessions.dispatch(openid, commandText)
+      await replyTo(openid, reply, "text", kb(() => buildReplyKeyboard(openid)))
+      return reply
+    },
   }
 
   // ---- 流式增量：assistant 文本累计 → 节流推送 stream_messages ----

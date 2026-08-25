@@ -6,6 +6,8 @@ export interface InteractionEvt {
   type: number
   buttonData: string
   buttonId: string
+  /** 快捷菜单（type=12）的功能 ID */
+  featureId: string
   userOpenid: string
 }
 
@@ -18,16 +20,31 @@ export interface InteractionDeps {
   respond(sessionId: string, permissionId: string, reply: "once" | "reject"): Promise<void>
   /** 以互动事件 id 为 event_id 发被动消息（结果反馈） */
   sendViaEvent(openid: string, eventId: string, text: string): Promise<void>
+  /** 可选：管理端菜单 featureId → 动作串（如 "model:2"、"new"）映射 */
+  resolveAction?(featureId: string): string | undefined
+  /** 可选：以指令文本驱动会话动作（菜单动作的执行通道） */
+  runCommand?(openid: string, commandText: string): Promise<string>
 }
 
 /**
- * 处理 INTERACTION_CREATE（按钮点击）。
+ * 处理 INTERACTION_CREATE（按钮点击 / 快捷菜单）。
  * 铁律：先 PUT code=0 应答（保 3 秒窗口），再做任何业务动作；
  * 业务结果通过 event_id 被动消息反馈给用户。
  */
 export async function handleInteraction(evt: InteractionEvt, deps: InteractionDeps): Promise<void> {
   try {
     await deps.put(evt.id, 0)
+    if (evt.type === 12) {
+      // 快捷菜单：featureId → 配置映射的动作串 → 指令通道执行
+      const action = deps.resolveAction?.(evt.featureId)
+      if (!action) {
+        qqLog("interactions", "KB_UNKNOWN", `featureId=${evt.featureId} 未在 menus 中配置`)
+        return
+      }
+      const reply = await deps.runCommand?.(evt.userOpenid, `/${action.replace(/^\//, "")}`)
+      if (reply) await deps.sendViaEvent(evt.userOpenid, evt.id, reply)
+      return
+    }
     if (evt.type !== 11) return // 仅消息按钮需要业务路由
     const parsed = parseButtonData(evt.buttonData)
     if (!parsed) {

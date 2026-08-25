@@ -23,6 +23,8 @@ export interface InteractionEvent {
   type: number
   buttonData: string
   buttonId: string
+  /** 快捷菜单（type=12）的功能 ID，管理端配置 */
+  featureId: string
   userOpenid: string
 }
 
