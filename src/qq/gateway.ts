@@ -266,7 +266,8 @@ export class QQGateway {
     if (t === "C2C_MESSAGE_CREATE") {
       const rawAttachments = Array.isArray(d.attachments) ? d.attachments : []
       this.opts.message({
-        openid: String(d.openid ?? ""),
+        // 事件结构随平台版本演进：openid 可能在顶层，也可能在 author.id / author.user_openid
+        openid: String(d.openid ?? (d.author as { id?: string; user_openid?: string } | undefined)?.user_openid ?? (d.author as { id?: string } | undefined)?.id ?? ""),
         content: String(d.content ?? ""),
         msgId: String(d.msg_id ?? ""),
         timestamp: Date.parse(String(d.timestamp ?? "")) || Date.now(),
