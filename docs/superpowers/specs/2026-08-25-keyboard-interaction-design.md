@@ -108,3 +108,37 @@
 - type=12 快捷菜单（管理端配置类，非代码能力）
 - 消息反馈（点赞点踩）、故事集、切换模型等互动类型的业务化处理（事件到达仅记日志）
 - 模板 keyboard（custom_template_id）
+
+## 9. 追加需求：菜单面板动作路由 + 模型/工作区/会话切换（2026-08-25 补充）
+
+### 9.1 模型预设自动扫描（presets.ts）
+
+- 读 opencode 配置（`~/.config/opencode/opencode.jsonc`，JSONC 宽松解析：去注释去尾逗号）的 `provider.*.models`，排除 `disabled_providers`
+- 生成预设：`{ id: "provider/modelID", label: models 里的 name 或 modelID, thinking: models[m].reasoning === true }`
+- 工作区列表：查询 opencode 服务器 `GET /session`，按 `directory` 去重（历史项目即工作区候选）
+
+### 9.2 每用户状态与指令
+
+| 指令 | 行为 |
+|------|------|
+| `/model` | 列出预设（序号+label+thinking 标记+当前项标注） |
+| `/model <序号>` | 切换该用户的当前模型（后续 prompt 的 model 参数生效），回复确认 |
+| `/thinking high` | 切到第一个 `thinking:true` 的预设；`low` → 第一个非 thinking 预设 |
+| `/workdir` | 列出工作区候选 + 当前标注 |
+| `/workdir <序号>` | 切换该用户工作区 + 自动重置会话（新会话在目标目录创建） |
+| `/session` | 列出**当前工作区**下的会话（server API 按 directory 过滤，标题+序号+当前标注） |
+| `/session <序号>` | 将该用户绑定切换到所选会话（后续消息进该会话） |
+
+- 模型选择、工作区选择为**每用户独立**状态（内存）
+- prompt/create 调用均携带该用户当前 `directory`
+
+### 9.3 菜单面板（管理端配置 + type=12 回调路由）
+
+- 菜单项在开放平台管理端配置（用户手动操作）；点击推 `INTERACTION_CREATE type=12`（含 `feature_id`）
+- 配置文件新增 `menus: [{ featureId: string, action: string }]`，action 形如 `model:N` / `thinking:high` / `workdir:N` / `new` / `session:N`
+- interactions.ts 扩展：type=12 → 查 menus 映射 → 路由到对应动作（复用指令执行通道）；无映射 → KB003 日志
+
+### 9.4 范围外追加
+
+- 管理端菜单项的配置操作本身（用户在开放平台页面完成）
+- opencode 无原生思考档位开关——思考档位经由模型预设（provider models 的 reasoning 标志）实现
