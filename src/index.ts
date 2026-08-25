@@ -146,7 +146,8 @@ export const QQBotPlugin: Plugin = async (input) => {
     const ctx = streams.get(openid)
     if (!handle || ctx !== handle) return false // 已被更新的消息覆盖，不碰新流
     streams.delete(openid)
-    if (!handle.sender || handle.sender.failed) return false // 无增量或失败 → 回落普通回复
+    if (!handle.sender || handle.sender.failed) return false // 失败 → 回落普通回复
+    if (!handle.sender.delivered) return false // 从未成功发出任何分片 → 回落普通回复
     void handle.sender.finish(fullText)
     return true
   }
