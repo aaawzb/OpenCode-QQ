@@ -58,6 +58,7 @@ export const E = {
   KB_PUT_FAIL: def("KB002", "互动应答 PUT 失败", "检查 interaction_id 有效性与 3 秒窗口", "warn"),
   KB_UNKNOWN: def("KB003", "未知按钮指令（button_data 无法解析）", undefined, "warn"),
   INT_HANDLE_FAIL: def("INT001", "INTERACTION_CREATE 处理异常", undefined, "error"),
+  MENU_SET_FAIL: def("MENU001", "自定义菜单同步失败", "接口限 5 QPM；插件启动时会自动重试一次", "warn"),
 } satisfies Record<string, ErrSpec>
 
 export type ErrKey = keyof typeof E

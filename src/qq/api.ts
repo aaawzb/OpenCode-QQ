@@ -194,4 +194,31 @@ export class QQApi {
       throw new Error(`putInteraction failed: HTTP ${res.status}`)
     }
   }
+
+  /** 查询全局自定义菜单（单聊窗口底部） */
+  async getMenu(): Promise<unknown> {
+    const token = await this.opts.getToken()
+    const res = await this.fetchFn(`${this.opts.restBase}/v2/menu`, {
+      headers: { Authorization: `QQBot ${token}` },
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) throw new Error(`getMenu failed: HTTP ${res.status}`)
+    return await res.json()
+  }
+
+  /** 修改全局自定义菜单（覆盖式；5 QPM）。menu 结构见官方 /v2/menu 文档 */
+  async setMenu(menu: unknown): Promise<void> {
+    const token = await this.opts.getToken()
+    const res = await this.fetchFn(`${this.opts.restBase}/v2/menu`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `QQBot ${token}` },
+      body: JSON.stringify({ menu }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      qqLog("api", "MENU_SET_FAIL", `HTTP ${res.status} ${text.slice(0, 150)}`)
+      throw new Error(`setMenu failed: HTTP ${res.status} ${text.slice(0, 100)}`)
+    }
+  }
 }

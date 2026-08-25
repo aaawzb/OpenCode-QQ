@@ -131,6 +131,52 @@ describe("QQApi event_id 被动回复与互动应答", () => {
   })
 })
 
+describe("QQApi 自定义菜单", () => {
+  function make() {
+    const fetchFn = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }))
+    const api = new QQApi({
+      restBase: "https://api.bot.qq.com",
+      getToken: () => Promise.resolve("TK"),
+      fetchFn: fetchFn as typeof fetch,
+    })
+    return { api, fetchFn }
+  }
+  it("getMenu GET /v2/menu 并返回 menu 结构", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ menu: { items: [] }, version: 1 }), { status: 200 }),
+    )
+    const api = new QQApi({
+      restBase: "https://api.bot.qq.com",
+      getToken: () => Promise.resolve("TK"),
+      fetchFn: fetchFn as typeof fetch,
+    })
+    const r = await api.getMenu()
+    const [url, init] = fetchFn.mock.calls[0]
+    expect(url).toBe("https://api.bot.qq.com/v2/menu")
+    expect(init.method).toBe("GET")
+    expect((r as { version: number }).version).toBe(1)
+  })
+  it("setMenu PUT /v2/menu body={menu}", async () => {
+    const { api, fetchFn } = make()
+    const menu = { items: [{ type: "send_message", name: "帮助", send_message: "/help" }] }
+    await api.setMenu(menu)
+    const [url, init] = fetchFn.mock.calls[0]
+    expect(url).toBe("https://api.bot.qq.com/v2/menu")
+    expect(init.method).toBe("PUT")
+    expect(JSON.parse(init.body)).toEqual({ menu })
+  })
+  it("setMenu 非 2xx 抛错", async () => {
+    const { api } = make()
+    const failing = vi.fn().mockResolvedValue(new Response('{"err":"x"}', { status: 400 }))
+    const failingApi = new QQApi({
+      restBase: "https://api.bot.qq.com",
+      getToken: () => Promise.resolve("TK"),
+      fetchFn: failing as typeof fetch,
+    })
+    await expect(failingApi.setMenu({ items: [] })).rejects.toThrow(/setMenu failed/)
+  })
+})
+
 describe("QQApi 超时守卫", () => {
   afterEach(() => vi.restoreAllMocks())
 
