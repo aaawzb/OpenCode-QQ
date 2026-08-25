@@ -27,8 +27,8 @@ function button(
     render_data: { label, visited_label: label, style: 0 },
     action: {
       type,
-      permission: { type: 2, specify_role_ids: [], specify_user_ids: [openid] },
-      click_limit: 1,
+      // 官方语义：0=指定用户（配合 specify_user_ids），1=管理员，2=所有人
+      permission: { type: 0, specify_role_ids: [], specify_user_ids: [openid] },
       data,
       ...(enter !== undefined ? { enter } : {}),
     },
