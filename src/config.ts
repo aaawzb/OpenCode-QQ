@@ -20,7 +20,9 @@ export interface QQConfig {
 export function loadConfig(path = CONFIG_PATH()): QQConfig | null {
   let file: Partial<QQConfig> = {}
   try {
-    file = JSON.parse(fs.readFileSync(path, "utf8"))
+    // Windows 记事本/PowerShell 写出的文件常带 BOM，JSON.parse 不认，须剥离
+    const raw = fs.readFileSync(path, "utf8").replace(/^\uFEFF/, "")
+    file = JSON.parse(raw)
   } catch {
     // 文件不存在或非法不致命，凭据可完全来自环境变量
   }
