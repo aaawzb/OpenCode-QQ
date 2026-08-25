@@ -68,3 +68,34 @@ export function parseButtonData(data: string): ButtonData | null {
   const m = /^(approve|reject):(\d+)$/.exec(data)
   return m ? { action: m[1] as "approve" | "reject", seq: Number(m[2]) } : null
 }
+
+const sm = (name: string, send: string) => ({ type: "send_message", name, send_message: send })
+
+/** 默认自定义菜单面板（单聊窗口底部）：点击自动填入指令，走现有指令系统 */
+export function buildDefaultMenuPanel(): unknown {
+  return {
+    items: [
+      sm("帮助", "/help"),
+      sm("新会话", "/new"),
+      {
+        type: "menu",
+        name: "模型",
+        sub_menu_items: [
+          sm("切换模型", "/model"),
+          sm("深度思考", "/thinking high"),
+          sm("快速模式", "/thinking low"),
+        ],
+      },
+      {
+        type: "menu",
+        name: "更多",
+        sub_menu_items: [
+          sm("状态", "/status"),
+          sm("工作区", "/workdir"),
+          sm("切换会话", "/session"),
+          sm("中断任务", "/interrupt"),
+        ],
+      },
+    ],
+  }
+}

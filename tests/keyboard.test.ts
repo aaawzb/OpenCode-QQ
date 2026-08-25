@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { buildAckKeyboard, buildApprovalKeyboard, buildReplyKeyboard, parseButtonData } from "../src/keyboard"
+import {
+  buildAckKeyboard,
+  buildApprovalKeyboard,
+  buildDefaultMenuPanel,
+  buildReplyKeyboard,
+  parseButtonData,
+} from "../src/keyboard"
 
 describe("keyboard 构造器", () => {
   it("审批键盘：两键回调流，限本人单次", () => {
@@ -35,5 +41,38 @@ describe("keyboard 构造器", () => {
     expect(parseButtonData("reject:12")).toEqual({ action: "reject", seq: 12 })
     expect(parseButtonData("junk")).toBeNull()
     expect(parseButtonData("approve:x")).toBeNull()
+  })
+  it("默认菜单面板：帮助/新会话 + 模型与更多折叠项", () => {
+    const menu = buildDefaultMenuPanel() as {
+      items: Array<{
+        type: string
+        name: string
+        send_message?: string
+        sub_menu_items?: Array<{ type: string; name: string; send_message?: string }>
+      }>
+    }
+    expect(menu.items).toHaveLength(4)
+    expect(menu.items[0]).toEqual({ type: "send_message", name: "帮助", send_message: "/help" })
+    expect(menu.items[1]).toEqual({ type: "send_message", name: "新会话", send_message: "/new" })
+    const modelMenu = menu.items[2]
+    expect(modelMenu.type).toBe("menu")
+    expect(modelMenu.name).toBe("模型")
+    expect(modelMenu.sub_menu_items?.map((s) => s.send_message)).toEqual([
+      "/model",
+      "/thinking high",
+      "/thinking low",
+    ])
+    const moreMenu = menu.items[3]
+    expect(moreMenu.sub_menu_items?.map((s) => s.send_message)).toEqual([
+      "/status",
+      "/workdir",
+      "/session",
+      "/interrupt",
+    ])
+    // 名称长度限制：主菜单 10 字符、子菜单 14 字符
+    for (const item of menu.items) {
+      expect(item.name.length).toBeLessThanOrEqual(10)
+      for (const sub of item.sub_menu_items ?? []) expect(sub.name.length).toBeLessThanOrEqual(14)
+    }
   })
 })
