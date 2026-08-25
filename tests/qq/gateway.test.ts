@@ -645,6 +645,7 @@ describe("QQGateway", () => {
       type: 11,
       buttonData: "approve:3",
       buttonId: "b1",
+      featureId: "",
       userOpenid: "U9",
     })
     gw.stop()
