@@ -1,6 +1,6 @@
 {
   "name": "opencode-qq",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "QQ bot (C2C) <-> opencode bridge plugin",
   "type": "module",
   "main": "dist/index.js",
