@@ -18,6 +18,7 @@ import {
 import { EventPusher } from "./event-pusher.js"
 import { toolExecuteAfterHook } from "./relay.js"
 import { AssistantTextBuffer } from "./stream-buffer.js"
+import { SingleInstanceLock } from "./lock.js"
 import { SessionManager, type OpencodeBridge } from "./session-manager.js"
 import { splitText } from "./util/chunk.js"
 import { guessImageMime, toImageDataUrl } from "./util/media.js"
@@ -33,6 +34,22 @@ export const QQBotPlugin: Plugin = async (input) => {
           service: "opencode-qq",
           level: "warn",
           message: "缺少 QQ_BOT_APPID/QQ_BOT_APPSECRET 或配置文件，插件未启用",
+        },
+      })
+      .catch(() => {})
+    return {}
+  }
+
+  // 桌面版会为每个项目实例各加载一次插件；用单实例锁保证只有一个网关在收发，
+  // 否则同一条 QQ 消息会被处理 N 次、用户收到 N 条重复回复。
+  const instanceLock = new SingleInstanceLock(`${SESSIONS_PATH()}.lock`)
+  if (!instanceLock.acquire()) {
+    await input.client.app
+      .log({
+        body: {
+          service: "opencode-qq",
+          level: "info",
+          message: "检测到其他 opencode 实例已启用 QQ 网关，本实例待命",
         },
       })
       .catch(() => {})
@@ -287,6 +304,7 @@ export const QQBotPlugin: Plugin = async (input) => {
       assistantBuf.clearAll()
       gateway.stop()
       pusher.dispose()
+      instanceLock.release()
     },
   }
 }
