@@ -86,6 +86,51 @@ describe("QQApi.sendC2C", () => {
   })
 })
 
+describe("QQApi event_id 被动回复与互动应答", () => {
+  function make() {
+    const fetchFn = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }))
+    const api = new QQApi({
+      restBase: "https://api.bot.qq.com",
+      getToken: () => Promise.resolve("TK"),
+      fetchFn: fetchFn as typeof fetch,
+    })
+    return { api, fetchFn }
+  }
+  it("eventId 被动回复：body 带 event_id 不带 msg_id/msg_seq", async () => {
+    const { api, fetchFn } = make()
+    await api.sendC2C("O", "已批准 #3", { eventId: "EVT1" })
+    const body = JSON.parse(fetchFn.mock.calls[0][1].body)
+    expect(body.event_id).toBe("EVT1")
+    expect(body.msg_id).toBeUndefined()
+    expect(body.msg_seq).toBeUndefined()
+  })
+  it("putInteraction PUT 正确 URL 与 body", async () => {
+    const { api, fetchFn } = make()
+    await api.putInteraction("IID", 0)
+    const [url, init] = fetchFn.mock.calls[0]
+    expect(url).toBe("https://api.bot.qq.com/interactions/IID")
+    expect(init.method).toBe("PUT")
+    expect(JSON.parse(init.body)).toEqual({ code: 0 })
+  })
+  it("putInteraction 超时 2.5 秒", async () => {
+    vi.useFakeTimers()
+    const fetchFn = vi.fn().mockImplementation(
+      (_u: string, i?: { signal?: AbortSignal }) =>
+        new Promise((_ok, bad) => i?.signal?.addEventListener("abort", () => bad(new Error("timeout")))),
+    )
+    const api = new QQApi({
+      restBase: "https://api.bot.qq.com",
+      getToken: () => Promise.resolve("TK"),
+      fetchFn: fetchFn as typeof fetch,
+    })
+    const p = api.putInteraction("IID", 0)
+    const assertion = expect(p).rejects.toThrow()
+    await vi.advanceTimersByTimeAsync(2600)
+    await assertion
+    vi.useRealTimers()
+  })
+})
+
 describe("QQApi 超时守卫", () => {
   afterEach(() => vi.restoreAllMocks())
 

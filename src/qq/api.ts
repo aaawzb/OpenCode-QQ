@@ -132,6 +132,17 @@ export class QQApi {
 
   private async doSend(openid: string, content: string, options: SendOptions): Promise<void> {
     const format = options.format ?? "text"
+    // event_id 被动回复（响应按钮互动）：与 msg_id 互斥，无 msg_seq 概念
+    if (options.eventId) {
+      const body = format === "markdown" ? { msg_type: 2, markdown: { content }, event_id: options.eventId } : { msg_type: 0, content, event_id: options.eventId }
+      try {
+        await this.postWithRetry(openid, body)
+      } catch (e) {
+        qqLog("api", "MSG_SEND_FAIL", failDetail(e))
+        throw e
+      }
+      return
+    }
     let msgId = options.msgId
     let seqReserved: number | undefined
     if (msgId) {
@@ -148,6 +159,7 @@ export class QQApi {
         body.msg_id = msgId
         body.msg_seq = seqReserved
       }
+      if (options.keyboard !== undefined) body.keyboard = options.keyboard
       return body
     }
     try {
@@ -164,6 +176,22 @@ export class QQApi {
       }
       qqLog("api", "MSG_SEND_FAIL", failDetail(e))
       throw e
+    }
+  }
+
+  /** 互动事件应答：3 秒窗口内调用，2.5 秒硬超时不重试（同 id 仅可应答一次） */
+  async putInteraction(interactionId: string, code: number): Promise<void> {
+    const token = await this.opts.getToken()
+    const res = await this.fetchFn(`${this.opts.restBase}/interactions/${interactionId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `QQBot ${token}` },
+      body: JSON.stringify({ code }),
+      signal: AbortSignal.timeout(2500),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      qqLog("api", "KB_PUT_FAIL", `HTTP ${res.status} ${text.slice(0, 150)}`)
+      throw new Error(`putInteraction failed: HTTP ${res.status}`)
     }
   }
 }
