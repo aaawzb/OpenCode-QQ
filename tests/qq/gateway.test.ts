@@ -575,4 +575,45 @@ describe("QQGateway", () => {
     gw.stop()
     server.close()
   })
+
+  it("INTERACTION_CREATE 路由到 interaction 回调", async () => {
+    const h = await startMockGateway()
+    const got = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      connected: vi.fn(),
+      disconnected: vi.fn(),
+      message: vi.fn(),
+      interaction: got,
+    })
+    gw.start()
+    const client = await firstClient(h)
+    client.send(
+      JSON.stringify({
+        op: 0,
+        s: 7,
+        t: "INTERACTION_CREATE",
+        id: "INT-EVT-1",
+        d: {
+          id: "IID-1",
+          type: 11,
+          scene: "c2c",
+          user_openid: "U9",
+          data: { type: 11, resolved: { button_data: "approve:3", button_id: "b1" } },
+        },
+      }),
+    )
+    await vi.waitFor(() => expect(got).toHaveBeenCalled())
+    expect(got.mock.calls[0][0]).toEqual({
+      id: "IID-1",
+      type: 11,
+      buttonData: "approve:3",
+      buttonId: "b1",
+      userOpenid: "U9",
+    })
+    gw.stop()
+    h.server.close()
+  })
 })

@@ -263,6 +263,20 @@ export class QQGateway {
       this.opts.connected()
       return
     }
+    if (t === "INTERACTION_CREATE" && this.opts.interaction) {
+      const data = (d.data ?? {}) as {
+        type?: number
+        resolved?: { button_data?: unknown; button_id?: unknown }
+      }
+      this.opts.interaction({
+        id: String(d.id ?? ""),
+        type: Number(data.type ?? d.type ?? 0),
+        buttonData: String(data.resolved?.button_data ?? ""),
+        buttonId: String(data.resolved?.button_id ?? ""),
+        userOpenid: String(d.user_openid ?? ""),
+      })
+      return
+    }
     if (t === "C2C_MESSAGE_CREATE") {
       const rawAttachments = Array.isArray(d.attachments) ? d.attachments : []
       this.opts.message({
