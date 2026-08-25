@@ -15,6 +15,8 @@ export interface QQConfig {
   markdownReply: boolean
   /** 是否启用流式打字机输出，默认 true */
   streaming: boolean
+  /** 是否启用消息按钮互动（keyboard），默认 true */
+  keyboard: boolean
 }
 
 export function loadConfig(path = CONFIG_PATH()): QQConfig | null {
@@ -38,5 +40,6 @@ export function loadConfig(path = CONFIG_PATH()): QQConfig | null {
     model: file.model,
     markdownReply: file.markdownReply ?? true,
     streaming: file.streaming ?? true,
+    keyboard: file.keyboard ?? true,
   }
 }
