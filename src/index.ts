@@ -1,5 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import fs from "node:fs"
+import path from "node:path"
 import { Approver } from "./approver.js"
 import { loadConfig } from "./config.js"
 import { createGatewayUrlFetcher, QQGateway } from "./qq/gateway.js"
@@ -22,7 +23,7 @@ import { AssistantTextBuffer } from "./stream-buffer.js"
 import { SingleInstanceLock } from "./lock.js"
 import { SessionManager, type OpencodeBridge } from "./session-manager.js"
 import { splitText } from "./util/chunk.js"
-import { guessImageMime, toImageDataUrl } from "./util/media.js"
+import { saveAttachment, toImageDataUrl } from "./util/media.js"
 import { buildAckKeyboard, buildApprovalKeyboard, buildReplyKeyboard } from "./keyboard.js"
 import { handleInteraction, type InteractionDeps } from "./interactions.js"
 
@@ -257,19 +258,45 @@ export const QQBotPlugin: Plugin = async (input) => {
         const notice = pendingNotice.get(msg.openid)
         pendingNotice.delete(msg.openid)
 
-        // 附件下载为 data URL（多模态 file part），失败降级为纯文字
+        // 附件路由：图片 → 多模态 file part（mime 取自 content_type）；
+        // 文件 → 下载保存到项目目录 .qq-files/，prompt 告知路径由 opencode 工具读取
         const files: Array<{ mime: string; dataUrl: string }> = []
+        const savedFiles: Array<{ filename: string; path: string; size: number }> = []
         for (const att of msg.attachments ?? []) {
           try {
-            files.push({ mime: guessImageMime(att.url), dataUrl: await toImageDataUrl(att.url) })
-          } catch {
-            await replyTo(msg.openid, "⚠️ 图片下载失败，仅处理文字部分").catch(() => {})
+            if (att.contentType.startsWith("image/")) {
+              files.push({
+                mime: att.contentType,
+                dataUrl: await toImageDataUrl(att.url, fetch, att.contentType),
+              })
+            } else {
+              const saved = await saveAttachment(
+                att.url,
+                att.filename ?? "file",
+                path.join(input.directory, ".qq-files"),
+              )
+              savedFiles.push(saved)
+            }
+          } catch (e) {
+            await replyTo(msg.openid, `⚠️ 附件下载失败（${att.filename ?? att.contentType}）：${String(e).slice(0, 80)}，仅处理文字部分`).catch(() => {})
           }
         }
+        const mediaNote = [
+          files.length ? `[图片 x${files.length}]` : "",
+          savedFiles.length
+            ? `[文件 x${savedFiles.length}: ${savedFiles.map((f) => `${f.filename}（${f.size} 字节）已保存到 ${f.path}，请用工具查看内容`).join("；")}]`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" ")
         const promptText =
           (msg.quotedText ? `[引用消息] ${msg.quotedText}\n` : "") +
-          (files.length ? `[图片 x${files.length}] ` : "") +
+          (mediaNote ? `${mediaNote} ` : "") +
           msg.content
+        if (!promptText.trim() && !files.length) {
+          await replyTo(msg.openid, "收到空消息，未做处理。")
+          return
+        }
         stream = beginStream(msg.openid)
         const answer = await sessions.dispatch(msg.openid, promptText, files)
         const deliveredByStream = endStream(msg.openid, answer, stream)

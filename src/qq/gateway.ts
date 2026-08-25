@@ -287,9 +287,9 @@ export class QQGateway {
         timestamp: Date.parse(String(d.timestamp ?? "")) || Date.now(),
         attachments: rawAttachments
           .filter((a): a is Record<string, unknown> => !!a && typeof a === "object")
-          .filter((a) => String(a.content_type ?? a.contentType ?? "") === "image" || String(a.url ?? "").match(/\.(png|jpe?g|gif|webp)/i))
+          // 实测 content_type 带子类型（"image/jpeg"）或为 "file"；保留原值由上层路由
           .map((a) => ({
-            contentType: "image",
+            contentType: String(a.content_type ?? a.contentType ?? "file"),
             url: String(a.url ?? ""),
             filename: a.filename === undefined ? undefined : String(a.filename),
           }))
