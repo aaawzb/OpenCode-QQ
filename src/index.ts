@@ -197,6 +197,8 @@ export const QQBotPlugin: Plugin = async (input) => {
     keyboard?: unknown,
     eventId?: string,
   ): Promise<void> {
+    // 纯文本消息不渲染 keyboard：挂按钮时强制 markdown
+    if (keyboard && format === "text") format = "markdown"
     const ref = passiveRefs.get(openid)
     const chunks = splitText(text)
     for (const chunk of chunks) {

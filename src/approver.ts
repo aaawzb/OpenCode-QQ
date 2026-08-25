@@ -25,7 +25,7 @@ export class Approver {
   render(seq: number): string {
     const item = this.pending.get(seq)
     return [
-      `[权限请求 #${seq}] ${item?.summary ?? ""}`,
+      `「权限请求 #${seq}」 ${item?.summary ?? ""}`,
       `回复“同意 ${seq}”批准本次，回复“拒绝 ${seq}”拒绝。`,
     ].join("\n")
   }
