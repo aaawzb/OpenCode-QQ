@@ -1,5 +1,6 @@
 import WebSocket from "ws"
 import { GATEWAY_PATH } from "../constants.js"
+import { qqLog } from "../errors.js"
 import type { GatewayEvents, IncomingC2CMessage } from "../types.js"
 import { extractQuotedText } from "../util/quote.js"
 
@@ -7,8 +8,19 @@ const OP_DISPATCH = 0
 const OP_HEARTBEAT = 1
 const OP_IDENTIFY = 2
 const OP_RESUME = 6
+const OP_SERVER_RECONNECT = 7
+const OP_INVALID_SESSION = 9
 const OP_HELLO = 10
 const OP_HEARTBEAT_ACK = 11
+
+/** close code 分级：intents 无权限 → 停止重连 */
+const CLOSE_INTENTS_DENIED = new Set([4013, 4014])
+/** close code 分级：机器人封禁/下架 → 停止重连 */
+const CLOSE_BOT_BANNED = new Set([4914, 4915])
+/** close code 分级：鉴权失败 → 清空会话后重连（4010 与 4001-4005） */
+function isAuthFailClose(code: number): boolean {
+  return code === 4010 || (code >= 4001 && code <= 4005)
+}
 
 interface Packet {
   op: number
@@ -37,6 +49,8 @@ export class QQGateway {
   private stopped = false
   private seenIds = new Set<string>()
   private seenOrder: string[] = []
+  /** 最近一次收到 op11 心跳 ack 的时间戳；每次 HELLO 后重置为当前时间 */
+  private lastAckAt = 0
 
   private isDuplicate(key: string): boolean {
     if (!key) return false
@@ -79,6 +93,48 @@ export class QQGateway {
     this.ws = null
   }
 
+  /** 清空会话状态，下次 HELLO 将走全新 Identify */
+  private clearSession(): void {
+    this.sessionId = null
+    this.lastSeq = null
+    this.resumeAttempted = false
+  }
+
+  /** 致命关闭（封禁/无权限）：停止重连并释放全部定时器与连接 */
+  private halt(): void {
+    this.stopped = true
+    this.clearSession()
+    this.cleanup()
+  }
+
+  /**
+   * close code 分级处理：
+   * - 4013/4014 intents 无权限 → 停止重连（重连也必然再被拒）
+   * - 4914/4915 机器人封禁 → 停止重连
+   * - 4010/4001-4005 鉴权失败 → 清空会话后按退避重连
+   * - 其余 → 按原退避逻辑重连
+   */
+  private handleClose(code: number): void {
+    if (CLOSE_INTENTS_DENIED.has(code)) {
+      qqLog("gw", "GW_INTENTS_DENIED", code)
+      this.halt()
+      return
+    }
+    if (CLOSE_BOT_BANNED.has(code)) {
+      qqLog("gw", "GW_BOT_BANNED", code)
+      this.halt()
+      return
+    }
+    if (isAuthFailClose(code)) {
+      qqLog("gw", "GW_AUTH_FAIL", code)
+      this.clearSession()
+      this.scheduleReconnect()
+      return
+    }
+    qqLog("gw", "GW_CLOSED", code)
+    this.scheduleReconnect()
+  }
+
   private scheduleReconnect(): void {
     if (this.stopped) return
     if (this.resumeAttempted) {
@@ -110,9 +166,9 @@ export class QQGateway {
       }
       this.handlePacket(pkt)
     })
-    ws.on("close", () => {
+    ws.on("close", (code) => {
       this.opts.disconnected()
-      this.scheduleReconnect()
+      this.handleClose(code)
     })
     ws.on("error", () => ws.terminate())
   }
@@ -132,6 +188,18 @@ export class QQGateway {
         break
       }
       case OP_HEARTBEAT_ACK:
+        this.lastAckAt = Date.now()
+        break
+      case OP_SERVER_RECONNECT:
+        // 服务端要求重连：保留会话（重连后可 Resume），主动 terminate 走 close → 重连
+        qqLog("gw", "GW_SERVER_RECONNECT")
+        this.ws?.terminate()
+        break
+      case OP_INVALID_SESSION:
+        // Resume 被拒（Invalid Session）：清空会话，重连后走全新 Identify
+        qqLog("gw", "GW_RESUME_REJECTED")
+        this.clearSession()
+        this.ws?.terminate()
         break
       case OP_DISPATCH: {
         this.lastSeq = pkt.s ?? this.lastSeq
@@ -165,14 +233,25 @@ export class QQGateway {
 
   private startHeartbeat(intervalMs: number): void {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+    // 每条新连接重置 ack 基准：HELLO 后一个完整周期内未发心跳即超时判定不成立
+    this.lastAckAt = Date.now()
     this.heartbeatTimer = setInterval(() => {
+      // 超过约 2×heartbeat_interval 未收到任何 op11 ack，判定半开连接，强制重连
+      if (Date.now() - this.lastAckAt > intervalMs * 2) {
+        qqLog("gw", "GW_HEARTBEAT_TIMEOUT")
+        this.ws?.terminate()
+        return
+      }
       this.ws?.send(JSON.stringify({ op: OP_HEARTBEAT, d: this.lastSeq }))
     }, intervalMs)
   }
 
   private handleDispatch(t: string, d: Record<string, unknown>): void {
     if (t === "READY") {
-      this.sessionId = String(d.session_id)
+      // 防污染：session_id 缺失/为空时不得写入，否则重连会以空值尝试 Resume
+      if (typeof d.session_id === "string" && d.session_id !== "") {
+        this.sessionId = d.session_id
+      }
       this.resumeAttempted = false
       this.reconnectAttempt = 0
       this.opts.connected()

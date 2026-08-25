@@ -47,6 +47,62 @@ async function firstClient(h: Harness): Promise<WsSocket> {
   return h.lastClient()!
 }
 
+interface LogSpy {
+  text: () => string
+}
+
+function spyLogs(): LogSpy {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+  const error = vi.spyOn(console, "error").mockImplementation(() => {})
+  return {
+    text: () => [...warn.mock.calls, ...error.mock.calls].map((c) => c.join(" ")).join("\n"),
+  }
+}
+
+interface MultiConnHarness {
+  port: number
+  server: WebSocketServer
+  clients: WsSocket[]
+  sentOps: number[][]
+}
+
+/** 多连接 mock 网关：HELLO(60s 心跳) → op2 回 READY，op6 默认回 RESUMED；记录每条连接收到的 op 序列 */
+async function startMultiConnGateway(opts?: { onResume?: (client: WsSocket) => void; noAck?: boolean; interval?: number }): Promise<MultiConnHarness> {
+  const server = new WebSocketServer({ port: 0 })
+  await new Promise<void>((r) => server.on("listening", r))
+  const port = (server.address() as { port: number }).port
+  const h: MultiConnHarness = { port, server, clients: [], sentOps: [] }
+  server.on("connection", (client) => {
+    h.clients.push(client)
+    const ops: number[] = []
+    h.sentOps.push(ops)
+    client.send(JSON.stringify({ op: 10, d: { heartbeat_interval: opts?.interval ?? 60000 } }))
+    client.on("message", (raw) => {
+      const pkt = JSON.parse(raw.toString())
+      ops.push(pkt.op)
+      if (pkt.op === 2) {
+        client.send(
+          JSON.stringify({
+            op: 0,
+            s: 1,
+            t: "READY",
+            // 故意每次连接给不同 session_id，便于区分
+            d: { session_id: `SESS-${h.sentOps.length}`, user: { id: "bot" } },
+          }),
+        )
+      }
+      if (pkt.op === 6) {
+        if (opts?.onResume) opts.onResume(client)
+        else client.send(JSON.stringify({ op: 0, s: 2, t: "RESUMED", d: {} }))
+      }
+      if (pkt.op === 1 && !opts?.noAck) client.send(JSON.stringify({ op: 11 }))
+    })
+  })
+  return h
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 afterEach(() => vi.restoreAllMocks())
 
 describe("QQGateway", () => {
@@ -290,5 +346,233 @@ describe("QQGateway", () => {
     expect(msg.quotedText).toBe("原图内容")
     gw.stop()
     h.server.close()
+  })
+
+  it("op9 Invalid Session：清空会话、告警 GW004 并重连走全新 Identify", async () => {
+    const h = await startMultiConnGateway({
+      onResume: (client) => client.send(JSON.stringify({ op: 9, d: false })),
+    })
+    const logs = spyLogs()
+    const connected = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      reconnectBaseMs: 10,
+      connected,
+      message: vi.fn(),
+      disconnected: vi.fn(),
+    })
+    gw.start()
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(1))
+    h.clients[0].close() // 触发一次断线，下条连接应尝试 Resume
+    // conn2 Resume 被 op9 拒绝（无 RESUMED 事件），conn3 全新 Identify 成功 → 共 2 次 connected
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(2), { timeout: 5000 })
+    expect(h.sentOps[1]).toContain(6) // 第二次连接走了 Resume
+    expect(logs.text()).toContain("GW004") // 收到 op9 后告警
+    expect(h.sentOps[2]).toContain(2) // op9 清空会话后，第三次连接为全新 Identify
+    expect(h.sentOps[2]).not.toContain(6)
+    gw.stop()
+    h.server.close()
+  })
+
+  it("op7 Reconnect：告警 GW005 并主动重连", async () => {
+    const h = await startMultiConnGateway()
+    const logs = spyLogs()
+    const connected = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      reconnectBaseMs: 10,
+      connected,
+      message: vi.fn(),
+      disconnected: vi.fn(),
+    })
+    gw.start()
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(1))
+    ;(await firstClient({ server: h.server, port: h.port, lastClient: () => h.clients.at(-1) })).send(
+      JSON.stringify({ op: 7 }),
+    )
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(2), { timeout: 5000 })
+    expect(logs.text()).toContain("GW005")
+    gw.stop()
+    h.server.close()
+  })
+
+  it("close 4013/4014：告警 GW006 并停止重连", async () => {
+    for (const code of [4013, 4014]) {
+      const h = await startMultiConnGateway()
+      const logs = spyLogs()
+      const connected = vi.fn()
+      const gw = new QQGateway({
+        getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+        getToken: () => Promise.resolve("TK"),
+        intents: INTENT,
+        reconnectBaseMs: 10,
+        connected,
+        message: vi.fn(),
+        disconnected: vi.fn(),
+      })
+      gw.start()
+      await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(1))
+      h.clients[0].close(code, "intents denied")
+      await vi.waitFor(() => expect(logs.text()).toContain("GW006"))
+      await sleep(300)
+      expect(connected).toHaveBeenCalledTimes(1) // 停止重连
+      gw.stop()
+      h.server.close()
+    }
+  })
+
+  it("close 4914/4915：告警 GW007（封禁）并停止重连", async () => {
+    const h = await startMultiConnGateway()
+    const logs = spyLogs()
+    const connected = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      reconnectBaseMs: 10,
+      connected,
+      message: vi.fn(),
+      disconnected: vi.fn(),
+    })
+    gw.start()
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(1))
+    h.clients[0].close(4915, "banned")
+    await vi.waitFor(() => expect(logs.text()).toContain("GW007"))
+    await sleep(300)
+    expect(connected).toHaveBeenCalledTimes(1)
+    gw.stop()
+    h.server.close()
+  })
+
+  it("close 4010：告警 GW008、清空会话并以全新 Identify 重连", async () => {
+    const h = await startMultiConnGateway()
+    const logs = spyLogs()
+    const connected = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      reconnectBaseMs: 10,
+      connected,
+      message: vi.fn(),
+      disconnected: vi.fn(),
+    })
+    gw.start()
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(1))
+    h.clients[0].close(4010, "auth fail")
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(2), { timeout: 5000 })
+    expect(logs.text()).toContain("GW008")
+    expect(h.sentOps[1]).toContain(2) // 会话已清空 → 全新 Identify
+    expect(h.sentOps[1]).not.toContain(6)
+    gw.stop()
+    h.server.close()
+  })
+
+  it("其他 close code：告警 GW003 并按退避重连", async () => {
+    const h = await startMultiConnGateway()
+    const logs = spyLogs()
+    const connected = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      reconnectBaseMs: 10,
+      connected,
+      message: vi.fn(),
+      disconnected: vi.fn(),
+    })
+    gw.start()
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(1))
+    h.clients[0].close(4321, "unknown")
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(2), { timeout: 5000 })
+    expect(logs.text()).toContain("GW003")
+    gw.stop()
+    h.server.close()
+  })
+
+  it("心跳超时：持续无 op11 ack 时判定半开连接并强制重连（GW009）", async () => {
+    const h = await startMultiConnGateway({ noAck: true, interval: 15 })
+    const logs = spyLogs()
+    const connected = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      reconnectBaseMs: 10,
+      connected,
+      message: vi.fn(),
+      disconnected: vi.fn(),
+    })
+    gw.start()
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(2), { timeout: 5000 }) // 第一条连接因心跳超时被 terminate 后重连
+    expect(logs.text()).toContain("GW009")
+    gw.stop()
+    h.server.close()
+  })
+
+  it("心跳正常收到 op11 时不会误判超时", async () => {
+    const h = await startMultiConnGateway({ interval: 25 })
+    const connected = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${h.port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      reconnectBaseMs: 10,
+      connected,
+      message: vi.fn(),
+      disconnected: vi.fn(),
+    })
+    gw.start()
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(1))
+    await sleep(300)
+    expect(connected).toHaveBeenCalledTimes(1) // 期间未被误杀
+    const beats = h.sentOps[0].filter((op) => op === 1).length
+    expect(beats).toBeGreaterThanOrEqual(3) // 心跳确实发了多拍且都收到 ack
+    gw.stop()
+    h.server.close()
+  })
+
+  it("READY 缺失/空 session_id 时不污染会话，重连仍走全新 Identify", async () => {
+    const server = new WebSocketServer({ port: 0 })
+    await new Promise<void>((r) => server.on("listening", r))
+    const port = (server.address() as { port: number }).port
+    const clients: WsSocket[] = []
+    const sentOps: number[][] = []
+    server.on("connection", (client) => {
+      clients.push(client)
+      const ops: number[] = []
+      sentOps.push(ops)
+      client.send(JSON.stringify({ op: 10, d: { heartbeat_interval: 60000 } }))
+      client.on("message", (raw) => {
+        const pkt = JSON.parse(raw.toString())
+        ops.push(pkt.op)
+        if (pkt.op === 2) {
+          // 空 session_id：不得被写入会话状态
+          client.send(JSON.stringify({ op: 0, s: 1, t: "READY", d: { session_id: "", user: { id: "bot" } } }))
+        }
+      })
+    })
+    const connected = vi.fn()
+    const gw = new QQGateway({
+      getGatewayUrl: () => Promise.resolve(`ws://127.0.0.1:${port}`),
+      getToken: () => Promise.resolve("TK"),
+      intents: INTENT,
+      reconnectBaseMs: 10,
+      connected,
+      message: vi.fn(),
+      disconnected: vi.fn(),
+    })
+    gw.start()
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(1))
+    clients[0].close()
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledTimes(2), { timeout: 5000 })
+    expect(sentOps[1]).toContain(2) // 空 session_id 未写入 → 重连走 Identify 而非 Resume
+    expect(sentOps[1]).not.toContain(6)
+    gw.stop()
+    server.close()
   })
 })
