@@ -10,7 +10,8 @@ describe("keyboard 构造器", () => {
     expect(btns[0].action).toMatchObject({
       type: 1,
       data: "approve:3",
-      permission: { type: 0, specify_user_ids: ["USER_OPENID"] },
+      // 单聊场景用"所有人"权限（实际只有对话双方能点）；type=0 指定用户会导致客户端提示无权限
+      permission: { type: 2, specify_user_ids: [] },
     })
     expect(btns[0].action.click_limit).toBeUndefined() // 已废弃字段不发送
     expect(btns[1].render_data.label).toBe("拒绝 3")

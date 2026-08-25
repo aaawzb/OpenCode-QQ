@@ -18,7 +18,7 @@ function button(
   label: string,
   data: string,
   type: number,
-  openid: string,
+  _openid: string,
   enter?: boolean,
 ): QQButton {
   return {
@@ -26,8 +26,9 @@ function button(
     render_data: { label, visited_label: label, style: 0 },
     action: {
       type,
-      // 官方语义：0=指定用户（配合 specify_user_ids），1=管理员，2=所有人
-      permission: { type: 0, specify_role_ids: [], specify_user_ids: [openid] },
+      // 单聊场景用"所有人"权限：实际只有对话双方能点。
+      // type=0 指定用户会导致客户端点击时提示"无权限操作"（实测）
+      permission: { type: 2, specify_role_ids: [], specify_user_ids: [] },
       data,
       ...(enter !== undefined ? { enter } : {}),
     },
