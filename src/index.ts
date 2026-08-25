@@ -1,4 +1,5 @@
 import type { Plugin } from "@opencode-ai/plugin"
+import { tool } from "@opencode-ai/plugin"
 import fs from "node:fs"
 import path from "node:path"
 import { Approver } from "./approver.js"
@@ -444,7 +445,47 @@ export const QQBotPlugin: Plugin = async (input) => {
   // 网关启动由单实例锁仲裁：抢到锁立即启动，否则由 lockRetry 稍后接管时启动
   if (gatewayActive) gateway.start()
 
+  /** openid 反查：会话 ID → 绑定用户 */
+  const openidOfSession = (sid: string): string | null => {
+    for (const [openid, s] of Object.entries(sessions.snapshot())) if (s === sid) return openid
+    return null
+  }
+
+  const detectFileType = (filename: string): number => {
+    const ext = path.extname(filename).toLowerCase().replace(".", "")
+    if (["png", "jpg", "jpeg", "gif", "webp", "bmp"].includes(ext)) return 1
+    if (ext === "mp4") return 2
+    if (["silk", "mp3", "wav", "ogg"].includes(ext)) return 3
+    return 4
+  }
+
   return {
+    tool: {
+      qq_send_file: tool({
+        description:
+          "通过 QQ 把本地文件/图片/视频发送给当前对话的用户。当用户要求把某个文件、图片、截图或产出物发到 QQ 时调用",
+        args: {
+          path: tool.schema.string().describe("要发送的文件绝对路径"),
+          caption: tool.schema.string().optional().describe("可选说明文字，将随文件一并发送"),
+        },
+        execute: async (args, ctx) => {
+          const openid = openidOfSession(ctx.sessionID)
+          if (!openid) return "当前会话未绑定 QQ 用户，无法通过 QQ 发送。"
+          const data = await fs.promises.readFile(args.path)
+          const filename = path.basename(args.path)
+          const fileInfo = await api.uploadFileC2C(openid, {
+            data,
+            filename,
+            fileType: detectFileType(filename),
+          })
+          const ref = passiveRefs.get(openid)
+          const fresh = !!ref && Date.now() - ref.receivedAt < PASSIVE_WINDOW_MS
+          await api.sendMedia(openid, fileInfo, fresh ? { msgId: ref!.msgId } : {})
+          if (args.caption) await replyTo(openid, args.caption)
+          return `已通过 QQ 发送 ${filename}（${data.length} 字节）`
+        },
+      }),
+    },
     event: async ({ event }) => {
       for (const h of listeners) h({ type: event.type, properties: event.properties ?? {} })
     },
