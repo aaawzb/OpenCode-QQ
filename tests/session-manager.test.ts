@@ -20,6 +20,7 @@ function makeClient(existingSessions: Record<string, { id: string }> = {}) {
     sessions: existingSessions,
     createdTitles: [] as string[],
     prompted: [] as { id: string; text: string; noReply: boolean; files?: Array<{ mime: string; dataUrl: string }> }[],
+    interrupted: [] as string[],
     model: { providerID: "anthropic", modelID: "claude-test" },
     async sessionCreate(title: string) {
       const id = `ses${nextId++}`
@@ -34,6 +35,9 @@ function makeClient(existingSessions: Record<string, { id: string }> = {}) {
     },
     async resolveModel() {
       return this.model
+    },
+    async sessionInterrupt(id: string) {
+      this.interrupted.push(id)
     },
   }
 }
@@ -143,5 +147,44 @@ describe("SessionManager.dispatch", () => {
     await sm.dispatch("u7", "先建会话")
     await sm.dispatch("u7", "看图", [{ mime: "image/png", dataUrl: "data:image/png;base64,xx" }])
     expect(client.prompted.at(-1)?.files).toEqual([{ mime: "image/png", dataUrl: "data:image/png;base64,xx" }])
+  })
+
+  it("/interrupt 调用 bridge.sessionInterrupt 并回复已中断", async () => {
+    await sm.dispatch("u1", "hi")
+    const sid = (await sm.getSessionId("u1"))!
+    const reply = await sm.dispatch("u1", "/interrupt")
+    expect(client.interrupted).toEqual([sid])
+    expect(reply).toContain("已中断")
+  })
+
+  it("/interrupt 无会话时提示", async () => {
+    expect(await sm.dispatch("nobody", "/interrupt")).toContain("暂无进行中的会话")
+  })
+
+  it("/continue 向当前会话追加继续并返回 AI 回复", async () => {
+    await sm.dispatch("u1", "hi")
+    const n = client.prompted.length
+    const sid = (await sm.getSessionId("u1"))!
+    const reply = await sm.dispatch("u1", "/continue")
+    expect(client.prompted[n]).toMatchObject({ id: sid, text: "继续" })
+    expect(reply.length).toBeGreaterThan(0)
+  })
+
+  it("/retry 重发上一条非指令消息", async () => {
+    await sm.dispatch("u1", "第一条")
+    const n = client.prompted.filter((p) => !p.noReply).length
+    await sm.dispatch("u1", "/retry")
+    expect(client.prompted.filter((p) => !p.noReply)[n]).toMatchObject({ text: "第一条" })
+  })
+
+  it("/retry 无历史时提示", async () => {
+    expect(await sm.dispatch("fresh", "/retry")).toContain("没有可重试的消息")
+  })
+
+  it("指令消息不记录为 lastUserText", async () => {
+    await sm.dispatch("u1", "/status")
+    const n = client.prompted.filter((p) => !p.noReply).length
+    await sm.dispatch("u1", "/retry")
+    expect(client.prompted.filter((p) => !p.noReply).length).toBe(n)
   })
 })

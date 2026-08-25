@@ -14,10 +14,14 @@ export interface OpencodeBridge {
   resolveModel(): Promise<{ providerID: string; modelID: string }>
   /** 可选：会话被 /new 重置时通知（index.ts 用它清空待审请求） */
   onSessionReset?(sessionId: string): void
+  /** 可选：中断会话当前任务（/interrupt 指令） */
+  sessionInterrupt?(sessionId: string): Promise<void>
 }
 
 export class SessionManager {
   private map = new Map<string, string>()
+  /** 每用户最近一条非指令消息（/retry 用），随实例生命周期 */
+  private lastUserText = new Map<string, string>()
 
   constructor(
     private bridge: OpencodeBridge,
@@ -68,16 +72,37 @@ export class SessionManager {
           return "已重置会话，下次消息将开启新对话。"
         case "status":
           return this.statusReply(openid)
+        case "interrupt": {
+          const sid = await this.getSessionId(openid)
+          if (!sid) return "暂无进行中的会话。"
+          await this.bridge.sessionInterrupt?.(sid)
+          return "已中断当前任务。"
+        }
+        case "continue": {
+          const sid = await this.getSessionId(openid)
+          if (!sid) return "暂无进行中的会话。"
+          return this.runPrompt(openid, sid, "继续", [])
+        }
+        case "retry": {
+          const last = this.lastUserText.get(openid)
+          if (!last) return "没有可重试的消息。"
+          return this.dispatch(openid, last)
+        }
         case "help":
           return [
             "opencode-qq 指令:",
             "/new — 重置当前会话",
             "/status — 查看会话状态",
+            "/interrupt — 中断当前任务",
+            "/continue — 继续当前任务",
+            "/retry — 重试上一条消息",
             "/help — 本帮助",
             "其余文本将直接交给 opencode 处理。",
           ].join("\n")
       }
     }
+
+    this.lastUserText.set(openid, text)
 
     let sessionId = await this.getSessionId(openid)
     if (!sessionId) {
@@ -88,6 +113,15 @@ export class SessionManager {
       this.persist()
       await this.bridge.sessionPrompt(sessionId, "以下用户将通过 QQ 单聊与你对话，回答请精炼。", true)
     }
+    return this.runPrompt(openid, sessionId, text, files)
+  }
+
+  private async runPrompt(
+    openid: string,
+    sessionId: string,
+    text: string,
+    files: Array<{ mime: string; dataUrl: string }>,
+  ): Promise<string> {
     const result = await this.bridge.sessionPrompt(sessionId, text, false, files)
     const out = result.parts
       .filter((p) => p.type === "text" && typeof p.text === "string")
