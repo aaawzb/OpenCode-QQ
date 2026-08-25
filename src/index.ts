@@ -110,15 +110,38 @@ export const QQBotPlugin: Plugin = async (input) => {
   const approver = new Approver(APPROVAL_TIMEOUT_MS)
 
   // ---- opencode 桥接 ----
+  // SDK client 会丢弃 query.directory（实测会话落到 server 默认目录），改用裸 fetch 直连
+  const serverBase = input.serverUrl.toString().replace(/\/$/, "")
+  const serverAuthHeader = `Basic ${Buffer.from(`opencode:${process.env.OPENCODE_SERVER_PASSWORD ?? ""}`).toString("base64")}`
+  async function serverFetch<T>(
+    method: "GET" | "POST" | "DELETE",
+    pathname: string,
+    opts: { directory?: string; body?: unknown } = {},
+  ): Promise<T> {
+    const qs = opts.directory ? `?directory=${encodeURIComponent(opts.directory)}` : ""
+    const res = await fetch(`${serverBase}${pathname}${qs}`, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: serverAuthHeader,
+        ...(opts.directory ? { "x-opencode-directory": opts.directory } : {}),
+      },
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+      signal: AbortSignal.timeout(600_000), // AI 生成可能很久
+    })
+    if (!res.ok) throw new Error(`opencode server ${method} ${pathname} failed: HTTP ${res.status}`)
+    return (res.status === 204 ? (undefined as T) : ((await res.json()) as T))
+  }
+
   let cachedModel: { providerID: string; modelID: string } | null = null
   const bridge: OpencodeBridge = {
     async sessionCreate(title, directory) {
       // 显式绑定目录：否则会话落到 sidecar 默认目录，桌面端切换项目后看不到
-      const res = await input.client.session.create({
+      const res = await serverFetch<{ id: string }>("POST", "/session", {
+        directory: directory ?? input.directory,
         body: { title },
-        query: { directory: directory ?? input.directory },
       })
-      return { id: res.data!.id }
+      return { id: res.id }
     },
     async sessionPrompt(id, text, noReply, files, opts) {
       let model = opts?.model ?? cachedModel
@@ -135,34 +158,32 @@ export const QQBotPlugin: Plugin = async (input) => {
         }
         cachedModel = model
       }
-      const directory = opts?.directory
-      const res = await input.client.session.prompt({
-        path: { id },
-        body: {
-          model,
-          noReply,
-          parts: [
-            { type: "text", text },
-            ...(files ?? []).map((f) => ({ type: "file" as const, mime: f.mime, url: f.dataUrl })),
-          ],
+      const res = await serverFetch<{ parts?: Array<{ type: string; text?: string }> }>(
+        "POST",
+        `/session/${id}/message`,
+        {
+          directory: opts?.directory,
+          body: {
+            model,
+            noReply,
+            parts: [
+              { type: "text", text },
+              ...(files ?? []).map((f) => ({ type: "file" as const, mime: f.mime, url: f.dataUrl })),
+            ],
+          },
         },
-        query: directory ? { directory } : undefined,
-      })
-      return { parts: (res.data as { parts?: Array<{ type: string; text?: string }> } | undefined)?.parts ?? [] }
+      )
+      return { parts: res.parts ?? [] }
     },
     resolveModel: async () => {
       if (!cachedModel) await bridge.sessionPrompt("__warm__", "", true).catch(() => {})
       return cachedModel ?? { providerID: "unknown", modelID: "unknown" }
     },
     async sessionInterrupt(sessionId, directory) {
-      await input.client.session.abort({
-        path: { id: sessionId },
-        query: directory ? { directory } : undefined,
-      })
+      await serverFetch("POST", `/session/${sessionId}/abort`, { directory })
     },
     async sessionList(directory) {
-      const res = await input.client.session.list({ query: directory ? { directory } : undefined })
-      const arr = (res.data ?? []) as Array<{ id: string; title?: string }>
+      const arr = await serverFetch<Array<{ id: string; title?: string }>>("GET", "/session", { directory })
       return arr.map((s) => ({ id: s.id, title: s.title ?? "" }))
     },
   }
